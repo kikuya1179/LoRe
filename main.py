@@ -4,12 +4,12 @@ from typing import Optional
 
 import torch
 
-from conf import load_config, Config
-from utils.seed import set_seed
-from utils.logger import Logger
-from envs.crafter_env import make_crafter_env
-from agents.dreamer import DreamerAgent
-from trainers.trainer import Trainer
+from .conf import load_config, Config
+from .utils.seed import set_seed
+from .utils.logger import Logger
+from .envs.crafter_env import make_crafter_env
+from .agents.dreamer_v3 import DreamerV3Agent
+from .trainers.trainer import Trainer
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,10 +45,35 @@ def main() -> Optional[int]:
     try:
         env = make_crafter_env(cfg.env)
     except Exception as e:
+        import traceback
         print("[FATAL] Failed to create environment:", e)
+        traceback.print_exc()
         return 1
 
-    agent = DreamerAgent(cfg.model, action_spec=env.action_spec, device=device, lr=cfg.train.learning_rate)
+    # obs_channels を env の前処理から推測（GrayScale + frame_stack 想定）。
+    # 実観測から安全に推定する。
+    try:
+        td0 = env.reset()
+        obs0 = td0.get("observation")
+        if obs0 is None:
+            obs0 = td0.get(("next", "observation"))
+        if obs0 is not None:
+            if obs0.dim() == 3:  # [C,H,W] or [H,W,C]
+                ch = obs0.shape[0] if obs0.shape[0] in (1, 3, 4) else obs0.shape[-1]
+            elif obs0.dim() == 4:  # [B,C,H,W] など
+                ch = obs0.shape[1]
+            else:
+                ch = getattr(cfg.model, "obs_channels", 1)
+            cfg.model.obs_channels = int(ch)
+    except Exception:
+        pass
+
+    agent = DreamerV3Agent(cfg.model, action_spec=env.action_spec, device=device, lr=cfg.train.learning_rate)
+    # expose lambda_kl to the agent for LLM prior regularization
+    try:
+        agent.lambda_kl = float(cfg.train.lambda_kl)
+    except Exception:
+        agent.lambda_kl = 0.0
 
     trainer = Trainer(
         env=env,

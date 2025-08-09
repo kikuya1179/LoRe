@@ -1,0 +1,29 @@
+LoRe (DreamerV3 + LLM(Gemini 2.5) + Crafter) セットアップ手順 (Windows PowerShell)
+
+1) Python / 仮想環境
+- 推奨: Python 3.10 系
+- venv 例:
+  python -m venv .venv
+  .\.venv\Scripts\Activate.ps1
+  python -m pip install --upgrade pip
+
+2) 依存関係インストール
+- プロジェクトルートで実行:
+  pip install -r LoRe/requirements.txt
+
+3) 環境変数 (Gemini API キー任意)
+- LLM を使う場合は環境変数を設定:
+  setx GEMINI_API_KEY "<YOUR_API_KEY>"
+- 新しい PowerShell を開き直してください。
+
+4) 実行
+- 例:
+  python -m LoRe.main --total_frames 100000 --device cuda --log_dir runs/dreamer_crafter
+
+5) 補足
+- CUDA を使う場合は、対応する PyTorch ビルドを利用してください: https://pytorch.org/get-started/locally/
+- Crafter/Gymnasium は CPU でも動作します。
+- LLM を有効にするには `conf.py` の `TrainConfig.use_llm=True` に設定し、`GEMINI_API_KEY` を設定してください。
+
+
+

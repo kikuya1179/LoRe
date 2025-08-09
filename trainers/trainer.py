@@ -5,7 +5,8 @@ from typing import Any
 
 import torch
 
-from utils.replay import make_replay
+from ..utils.replay import make_replay
+from ..utils.llm_adapter import LLMAdapter, LLMAdapterConfig
 
 
 class Trainer:
@@ -25,47 +26,134 @@ class Trainer:
         except Exception:
             self.obs_key = "observation"
 
-        # Reset environment
+        # Reset environment (Gymnasium API via TorchRL wrapper)
         td = self.env.reset()
+        # TorchRL GymWrapper returns TensorDict with key "observation" by default
         self._last_td = td
 
         self.global_step = 0
 
+        # LLM adapter (Gemini 2.5 via google-generativeai)
+        self.llm = LLMAdapter(
+            LLMAdapterConfig(
+                enabled=getattr(self.cfg.train, "use_llm", False),
+                model=getattr(self.cfg.train, "llm_model", "gemini-1.5-pro"),
+                features_dim=getattr(self.cfg.model, "llm_features_dim", 0),
+            )
+        )
+
+        # Random exploration warmup
+        self._random_warmup_steps = int(getattr(self.cfg.train, "init_random_frames", 0))
+        self._log_interval = int(getattr(self.cfg.train, "log_interval", 1000))
+        self._save_every = int(getattr(self.cfg.train, "save_every_frames", 0))
+
     def _get_obs_tensor(self, td) -> torch.Tensor:
+        # Root 'observation' か、'next' 配下から抽出
         obs = td.get(self.obs_key)
+        if obs is None and ("next", self.obs_key) in td.keys(True, True):
+            obs = td.get(("next", self.obs_key))
+        # ensure channels-first [C,H,W]
+        if obs.dim() == 3 and obs.shape[-1] in (1, 3) and obs.shape[0] not in (1, 3):
+            obs = obs.permute(2, 0, 1).contiguous()
         if obs.dim() == 3:
             obs = obs.unsqueeze(0)  # [C,H,W] -> [1,C,H,W]
+        # dtype to float32; scale if uint8
+        if obs.dtype == torch.uint8:
+            obs = obs.float().div_(255.0)
+        else:
+            obs = obs.float()
         return obs.to(self.device, non_blocking=True)
 
-    def _append_to_replay(self, prev_td, action, next_td):
+    def _append_to_replay(self, prev_td, action, next_td, llm_out: dict | None):
         # Build a minimal tensordict sample with keys: observation, action, reward, done, next_observation
-        from torchrl.data import TensorDict
+        try:
+            from tensordict import TensorDict  # TorchRL 0.9+ は独立パッケージ提供
+        except Exception:  # pragma: no cover
+            from torchrl.data import TensorDict  # 古いTorchRL向けフォールバック
+
+        # 観測の抽出
+        prev_obs = prev_td.get(self.obs_key)
+        if prev_obs is None and ("next", self.obs_key) in prev_td.keys(True, True):
+            prev_obs = prev_td.get(("next", self.obs_key))
+
+        next_obs = next_td.get(("next", self.obs_key))
+        if next_obs is None:
+            next_obs = next_td.get(self.obs_key)
+
+        # 報酬・終端は通常 'next' に格納
+        rew = next_td.get(("next", "reward")) or next_td.get("reward")
+        dn = next_td.get(("next", "done")) or next_td.get("done")
+        if dn is None:
+            term = next_td.get(("next", "terminated")) or next_td.get("terminated")
+            trunc = next_td.get(("next", "truncated")) or next_td.get("truncated")
+            if term is not None or trunc is not None:
+                import torch as _torch
+                t = (term if term is not None else 0)
+                u = (trunc if trunc is not None else 0)
+                dn = (t.to(dtype=_torch.bool) | u.to(dtype=_torch.bool)).to(dtype=_torch.float32)
+            else:
+                dn = None
 
         sample = TensorDict(
             {
-                "observation": prev_td.get(self.obs_key).cpu(),
+                "observation": prev_obs.cpu(),
                 "action": action.cpu(),
-                "reward": next_td.get("reward").cpu(),
-                "done": next_td.get("done").cpu(),
+                "reward": (rew if rew is not None else 0.0).cpu() if hasattr(rew, "cpu") else torch.tensor(rew or 0.0),
+                # done: terminated OR truncated（Gymnasium準拠）
+                "done": (dn if dn is not None else torch.tensor(0.0)).cpu(),
                 "next": {
-                    "observation": next_td.get(self.obs_key).cpu(),
+                    "observation": next_obs.cpu(),
                 },
             },
             batch_size=[],
         )
+        # Optional LLM annotations
+        if llm_out is not None:
+            import torch as _torch
+            if "prior_logits" in llm_out:
+                sample.set("llm_prior_logits", _torch.tensor(llm_out["prior_logits"]).cpu())
+            if "confidence" in llm_out:
+                sample.set("llm_confidence", _torch.tensor(llm_out["confidence"]).cpu())
+            if "mask" in llm_out:
+                sample.set("llm_mask", _torch.tensor(llm_out["mask"]).cpu())
+            if "features" in llm_out and getattr(self.cfg.model, "llm_features_dim", 0) > 0:
+                sample.set("llm_features", _torch.tensor(llm_out["features"]).cpu())
         self.replay.add(sample)
 
     def _collect(self, steps: int):
         td = self._last_td
         for _ in range(steps):
             obs = self._get_obs_tensor(td)
+            # LLM 事前/特徴の取得（任意、失敗は無視）
+            llm_out = None
+            try:
+                if getattr(self.cfg.train, "use_llm", False):
+                    obs_np = obs.detach().cpu().numpy()
+                    llm_out = self.llm.infer(obs_np, num_actions=getattr(self.agent, "n_actions", 0))
+            except Exception:
+                llm_out = None
+
+            # 初期ランダム行動期間
             with torch.no_grad():
-                action = self.agent.act(obs)
+                if self.global_step < self._random_warmup_steps:
+                    import torch as _torch
+                    n = int(getattr(self.agent, "n_actions", 1))
+                    action = _torch.randint(low=0, high=n, size=(1, 1), device=self.device)
+                else:
+                    action = self.agent.act(obs)
             # TorchRL envs expect action within a tensordict
             td.set("action", action.cpu())
             td = self.env.step(td)
 
-            self._append_to_replay(self._last_td, action, td)
+            # エピソード終端時は自動リセット
+            try:
+                is_done = bool(td.get("done").item()) if "done" in td.keys(True, True) else False
+            except Exception:
+                is_done = False
+            if is_done:
+                td = self.env.reset()
+
+            self._append_to_replay(self._last_td, action, td, llm_out)
             self._last_td = td
 
             self.global_step += 1
@@ -96,11 +184,23 @@ class Trainer:
             # logging
             if logs:
                 for k, v in logs.items():
-                    self.logger.add_scalar(k, float(v), self.global_step)
+                    if self.global_step % self._log_interval == 0:
+                        self.logger.add_scalar(k, float(v), self.global_step)
             # simple reward log
             try:
-                rew = float(self._last_td.get("reward").mean().item())
-                self.logger.add_scalar("env/reward", rew, self.global_step)
+                if self.global_step % self._log_interval == 0:
+                    rew = float(self._last_td.get("reward").mean().item())
+                    self.logger.add_scalar("env/reward", rew, self.global_step)
+            except Exception:
+                pass
+            # checkpoint（任意、エージェント側の save 実装に委ねる）
+            try:
+                if self._save_every and (self.global_step % self._save_every == 0):
+                    if hasattr(self.agent, "save"):
+                        import os
+                        os.makedirs(self.cfg.ckpt_dir, exist_ok=True)
+                        path = f"{self.cfg.ckpt_dir}/ckpt_step_{self.global_step}.pt"
+                        self.agent.save(path)
             except Exception:
                 pass
             self.logger.flush()
