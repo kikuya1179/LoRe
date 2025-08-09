@@ -94,12 +94,33 @@ class ModelConfig:
 - 読み込みはコード内で `DreamerV3Agent.load(path)` を呼び出してください（CLI からの再開フローは必要に応じ追加してください）。
 
 ## LLM（任意）
-- 有効化手順:
-  1) `LoRe/conf.py` の `TrainConfig.use_llm=True`
-  2) 環境変数 `GEMINI_API_KEY` を設定
-  3) 必要に応じて `TrainConfig.lambda_kl` を 0.01〜0.05 で調整
-- 仕様
-  - 無効時は LLM 呼び出しを行わず、バッファにもゼロベクトルが入るためコストゼロで動作します。
+LLM は API（Google Generative AI SDK）または CLI（gemini / gemini-cli）で呼び出せます。無効時はゼロ出力で学習が続きます。
+
+### API モード（推奨。無料枠あり）
+1) `LoRe/conf.py` で `TrainConfig.use_llm=True`
+2) 環境変数を設定
+```powershell
+$Env:GEMINI_API_KEY = "<YOUR_KEY>"
+# 任意: 既定モデルは gemini-2.5-flash-lite。上書きしたい場合
+# $Env:GEMINI_MODEL = "gemini-2.5-flash-lite"
+```
+3) 実行
+```powershell
+python -m LoRe.main --total_frames 20000 --device cuda --log_dir runs/dreamer_crafter
+```
+メモ: 料金・無料枠（RPM/RPD/TPM）は Google の最新ドキュメントを参照してください。
+
+### CLI モード（単発実行向け）
+1) `LoRe/conf.py` で `TrainConfig.use_llm=True` と `TrainConfig.llm_use_cli=True`
+2) `gemini`（または `gemini-cli`）が PATH にあることを確認
+3) 学習時に観測ごとに単発呼び出し（内部で `echo "<prompt>" | gemini` → 失敗時 `gemini-cli prompt` を自動フォールバック）
+
+CLI 例（参考）:
+```bash
+echo "リポジトリの最新コミット3件を要約" | gemini
+gemini-cli prompt "why is the sky blue?"
+```
+内部プロンプトは JSON で `action_prior.logits`（A次元）, `confidence`, `features`（K次元）を要求します。
 
 ## ロギング
 - `runs/<run_name>` に TensorBoard ログを保存。
@@ -114,6 +135,7 @@ class ModelConfig:
   ```
 - メモリ不足: `replay_capacity`/`batch_size`/`frame_stack` を下げる
 - ログが出ない: `log_interval` を小さくする（例: 200）
+- LLM が無反応/遅い: タイムアウトを `LLMAdapterConfig.timeout_s` で短く設定（既定 2.5s）
 
 ## ディレクトリ構成
 - `LoRe/envs/crafter_env.py`: Crafter→TorchRL 接続、前処理 Compose

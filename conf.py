@@ -32,6 +32,7 @@ class TrainConfig:
     # LLM
     use_llm: bool = False
     llm_model: str = "gemini-1.5-pro"
+    llm_use_cli: bool = False
 
 
 @dataclass
