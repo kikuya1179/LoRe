@@ -10,6 +10,10 @@ from .utils.logger import Logger
 from .envs.crafter_env import make_crafter_env
 from .agents.dreamer_v3 import DreamerV3Agent
 from .trainers.trainer import Trainer
+try:
+    from .trainers.enhanced_trainer import EnhancedTrainer  # type: ignore
+except Exception:  # pragma: no cover
+    EnhancedTrainer = None  # type: ignore
 
 
 def parse_args() -> argparse.Namespace:
@@ -83,7 +87,10 @@ def main() -> Optional[int]:
     except Exception:
         agent.lambda_kl = 0.0
 
-    trainer = Trainer(
+    # Choose trainer
+    use_enhanced = bool(getattr(cfg.train, "use_enhanced_trainer", False)) and (EnhancedTrainer is not None)
+    trainer_cls = EnhancedTrainer if use_enhanced else Trainer
+    trainer = trainer_cls(  # type: ignore[misc]
         env=env,
         agent=agent,
         logger=logger,
