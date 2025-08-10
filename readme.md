@@ -153,20 +153,7 @@ config.model.max_options = 8
 
 ---
 
-## 🧪 テスト & 検証
-
-### 統合テスト実行
-
-```powershell
-# Policy Prior (B) テスト
-python test_integration.py
-
-# Synthetic Replay (A) テスト  
-python test_synthetic_replay.py
-
-# Hierarchical Options (C) テスト
-python test_option_system.py
-```
+## 📊 モニタリング & 検証
 
 ### パフォーマンス指標
 
