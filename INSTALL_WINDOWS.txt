@@ -27,3 +27,4 @@ LoRe (DreamerV3 + LLM(Gemini 2.5) + Crafter) セットアップ手順 (Windows P
 
 $Env:GEMINI_API_KEY = "<YOUR_KEY>"
 
+

@@ -257,6 +257,33 @@ class Trainer:
         updates_per_collect = int(self.cfg.train.updates_per_collect)
 
         while self.global_step < total_frames:
+            # Anneal exploration parameters
+            try:
+                # Entropy coefficient: linear anneal from start -> entropy_anneal_to
+                ent_start = float(getattr(self.cfg.train, "entropy_coef", 0.05))
+                ent_to = float(getattr(self.cfg.train, "entropy_anneal_to", ent_start))
+                ent_frames = max(1, int(getattr(self.cfg.train, "entropy_anneal_frames", total_frames)))
+                frac = min(1.0, self.global_step / ent_frames)
+                current_entropy_coef = ent_start + (ent_to - ent_start) * frac
+                if hasattr(self.agent, "entropy_coef"):
+                    self.agent.entropy_coef = float(current_entropy_coef)
+                # Epsilon-greedy: linear decay from start -> epsilon_greedy_decay_to
+                eps_start = float(getattr(self.cfg.train, "epsilon_greedy", 0.2))
+                eps_to = float(getattr(self.cfg.train, "epsilon_greedy_decay_to", eps_start))
+                eps_frames = max(1, int(getattr(self.cfg.train, "epsilon_greedy_decay_frames", total_frames)))
+                frac_e = min(1.0, self.global_step / eps_frames)
+                current_eps = eps_start + (eps_to - eps_start) * frac_e
+                if hasattr(self.agent, "epsilon_greedy"):
+                    self.agent.epsilon_greedy = float(current_eps)
+                # Log occasionally
+                if self.global_step % self._log_interval == 0:
+                    try:
+                        self.logger.add_scalar("exploration/entropy_coef", float(current_entropy_coef), self.global_step)
+                        self.logger.add_scalar("exploration/epsilon_greedy", float(current_eps), self.global_step)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             self._collect(collect_per_iter)
             logs = self._update(updates_per_collect)
             # logging

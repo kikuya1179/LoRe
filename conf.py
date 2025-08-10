@@ -26,10 +26,16 @@ class TrainConfig:
     learning_rate: float = 3e-4
     gamma: float = 0.99
     lambda_kl: float = 0.01  # for LLM prior regularization
-    entropy_coef: float = 0.02  # encourage exploration
-    epsilon_greedy: float = 0.1  # random action probability in act()
+    # Exploration settings
+    entropy_coef: float = 0.05  # encourage exploration (increased)
+    epsilon_greedy: float = 0.2  # random action probability in act() (increased)
+    # Annealing schedules (optional)
+    entropy_anneal_to: float = 0.01
+    entropy_anneal_frames: int = 200_000
+    epsilon_greedy_decay_to: float = 0.05
+    epsilon_greedy_decay_frames: int = 300_000
     # Intrinsic reward (RND)
-    use_intrinsic: bool = False
+    use_intrinsic: bool = True
     intrinsic_coef: float = 0.1
     intrinsic_norm: bool = True
     save_every_frames: int = 100_000
