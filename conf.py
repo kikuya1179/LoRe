@@ -68,6 +68,15 @@ class TrainConfig:
     distill_initial_alpha: float = 0.3
     distill_final_alpha: float = 0.01
     distill_every: int = 1000
+    
+    # LoRe Synthetic Experience Parameters
+    synthetic_ratio_max: float = 0.25  # Maximum ratio of synthetic data in replay buffer
+    synthetic_weight_decay: float = 0.99  # Decay factor for synthetic data importance
+    synthetic_rollout_length: int = 5  # Maximum length of synthetic rollouts
+    synthetic_confidence_threshold: float = 0.3  # Minimum confidence to generate synthetic data
+    synthetic_success_threshold: float = 0.1  # Reward threshold for successful synthetic plans
+    synthetic_execution_prob: float = 0.2  # Probability of executing synthetic generation
+    synthetic_generation_interval: int = 100  # Steps between synthetic generation attempts
 
 
 @dataclass
@@ -84,6 +93,22 @@ class ModelConfig:
     llm_features_dim: int = 16  # Enable LLM feature fusion
     max_llm_features: int = 32
     feature_normalize_range: float = 3.0  # [-3, 3] normalization
+    
+    # LoRe Uncertainty Gate Parameters
+    beta_max: float = 0.3  # Maximum β value for LLM mixing
+    delta_target: float = 0.1  # Target KL divergence threshold
+    kl_lr: float = 1e-3  # Learning rate for Lagrange multiplier
+    uncertainty_threshold: float = 0.5  # Threshold for uncertainty-based gating
+    use_value_ensemble: bool = False  # Enable value ensemble for uncertainty estimation
+    
+    # LoRe Synthetic Data Parameters
+    lambda_bc: float = 0.1  # Behavioral cloning regularization coefficient for synthetic data
+    
+    # LoRe Option System Parameters
+    max_options: int = 8  # Maximum number of options/skills
+    option_generation_interval: int = 500  # Steps between skill generation attempts
+    skill_confidence_threshold: float = 0.4  # Minimum confidence for generated skills
+    enable_hierarchical_options: bool = False  # Enable option system
 
 
 @dataclass
