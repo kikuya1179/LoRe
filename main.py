@@ -68,7 +68,15 @@ def main() -> Optional[int]:
     except Exception:
         pass
 
-    agent = DreamerV3Agent(cfg.model, action_spec=env.action_spec, device=device, lr=cfg.train.learning_rate)
+    agent = DreamerV3Agent(
+        cfg.model,
+        action_spec=env.action_spec,
+        device=device,
+        lr=cfg.train.learning_rate,
+        gamma=cfg.train.gamma,
+        entropy_coef=getattr(cfg.train, "entropy_coef", 0.05),
+        epsilon_greedy=getattr(cfg.train, "epsilon_greedy", 0.0),
+    )
     # expose lambda_kl to the agent for LLM prior regularization
     try:
         agent.lambda_kl = float(cfg.train.lambda_kl)

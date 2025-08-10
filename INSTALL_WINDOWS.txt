@@ -25,5 +25,5 @@ LoRe (DreamerV3 + LLM(Gemini 2.5) + Crafter) セットアップ手順 (Windows P
 - Crafter/Gymnasium は CPU でも動作します。
 - LLM を有効にするには `conf.py` の `TrainConfig.use_llm=True` に設定し、`GEMINI_API_KEY` を設定してください。
 
-
+$Env:GEMINI_API_KEY = "<YOUR_KEY>"
 

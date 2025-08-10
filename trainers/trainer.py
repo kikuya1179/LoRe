@@ -7,6 +7,7 @@ import torch
 
 from ..utils.replay import make_replay
 from ..utils.llm_adapter import LLMAdapter, LLMAdapterConfig
+from ..utils.rnd import RND
 
 
 class Trainer:
@@ -37,10 +38,22 @@ class Trainer:
         self.llm = LLMAdapter(
             LLMAdapterConfig(
                 enabled=getattr(self.cfg.train, "use_llm", False),
-                model=getattr(self.cfg.train, "llm_model", "gemini-1.5-pro"),
+                model=getattr(self.cfg.train, "llm_model", "gemini-2.5-flash-lite"),
                 features_dim=getattr(self.cfg.model, "llm_features_dim", 0),
             )
         )
+
+        # 行動ヒストグラム用バケット
+        self._action_hist = None
+
+        # RND (intrinsic reward)
+        self._rnd = None
+        if getattr(self.cfg.train, "use_intrinsic", False):
+            try:
+                ch = int(getattr(self.cfg.model, "obs_channels", 4))
+                self._rnd = RND(in_channels=ch).to(self.device)
+            except Exception:
+                self._rnd = None
 
         # Random exploration warmup
         self._random_warmup_steps = int(getattr(self.cfg.train, "init_random_frames", 0))
@@ -122,6 +135,17 @@ class Trainer:
 
     def _collect(self, steps: int):
         td = self._last_td
+        # エピソード集計
+        if not hasattr(self, "_ep_return"):
+            self._ep_return = 0.0
+            self._ep_len = 0
+        if self._action_hist is None:
+            try:
+                import torch as _torch
+                n = int(getattr(self.agent, "n_actions", 0))
+                self._action_hist = _torch.zeros(n, dtype=_torch.long)
+            except Exception:
+                self._action_hist = None
         for _ in range(steps):
             obs = self._get_obs_tensor(td)
             # LLM 事前/特徴の取得（任意、失敗は無視）
@@ -145,12 +169,66 @@ class Trainer:
             td.set("action", action.cpu())
             td = self.env.step(td)
 
+            # 集計
+            try:
+                r = float(td.get("reward").mean().item()) if "reward" in td.keys(True, True) else 0.0
+            except Exception:
+                r = 0.0
+            # Intrinsic reward
+            if self._rnd is not None:
+                try:
+                    obs_i = self._get_obs_tensor(td)
+                    ri = self._rnd.intrinsic_reward(obs_i).mean().item()
+                    if getattr(self.cfg.train, "intrinsic_norm", True):
+                        # simple running normalization via EMA
+                        if not hasattr(self, "_ri_mean"):
+                            self._ri_mean = 0.0
+                            self._ri_var = 1.0
+                        m = 0.99
+                        self._ri_mean = m * self._ri_mean + (1 - m) * ri
+                        self._ri_var = m * self._ri_var + (1 - m) * (ri - self._ri_mean) ** 2
+                        ri_n = (ri - self._ri_mean) / (self._ri_var ** 0.5 + 1e-6)
+                    else:
+                        ri_n = ri
+                    r += float(self.cfg.train.intrinsic_coef) * ri_n
+                    # Train predictor a bit
+                    _ = self._rnd.update(obs_i)
+                except Exception:
+                    pass
+            self._ep_return += r
+            self._ep_len += 1
+            # 行動ヒストグラム
+            try:
+                if self._action_hist is not None:
+                    a = int(action.squeeze().item())
+                    if 0 <= a < self._action_hist.numel():
+                        self._action_hist[a] += 1
+            except Exception:
+                pass
+
             # エピソード終端時は自動リセット
             try:
                 is_done = bool(td.get("done").item()) if "done" in td.keys(True, True) else False
             except Exception:
                 is_done = False
             if is_done:
+                # ロギング（エピソード単位）
+                try:
+                    self.logger.add_scalar("env/episode_return", self._ep_return, self.global_step)
+                    self.logger.add_scalar("env/episode_length", float(self._ep_len), self.global_step)
+                    # 簡易成功率: 報酬>0 を成功とみなす（Crafter本来の達成は環境Infoから取るのが理想）
+                    self.logger.add_scalar("env/episode_success", 1.0 if self._ep_return > 0.0 else 0.0, self.global_step)
+                    # 行動分布（直近エピソード）
+                    if self._action_hist is not None:
+                        total = int(self._action_hist.sum().item()) or 1
+                        dist = {f"a{idx}": (int(v.item()) / total) for idx, v in enumerate(self._action_hist)}
+                        self.logger.add_scalars("policy/action_dist", dist, self.global_step)
+                except Exception:
+                    pass
+                self._ep_return = 0.0
+                self._ep_len = 0
+                if self._action_hist is not None:
+                    self._action_hist.zero_()
                 td = self.env.reset()
 
             self._append_to_replay(self._last_td, action, td, llm_out)

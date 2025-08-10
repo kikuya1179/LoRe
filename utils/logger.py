@@ -28,6 +28,25 @@ class Logger:
             dt = time.time() - self._t0
             print(f"[step={global_step}] {tag}={scalar_value:.4f} (t+{dt:.1f}s)")
 
+    def add_scalars(self, main_tag: str, tag_scalar_dict: dict[str, float], global_step: int) -> None:
+        if not tag_scalar_dict:
+            return
+        if self._tb is not None:
+            try:
+                self._tb.add_scalars(main_tag, tag_scalar_dict, global_step)
+            except Exception:
+                # Fallback: log individually
+                for k, v in tag_scalar_dict.items():
+                    self._tb.add_scalar(f"{main_tag}/{k}", v, global_step)
+        # Print compact summary occasionally
+        if global_step % 100 == 0:
+            try:
+                parts = ", ".join(f"{k}={v:.3f}" for k, v in list(tag_scalar_dict.items())[:4])
+                dt = time.time() - self._t0
+                print(f"[step={global_step}] {main_tag}: {parts} ... (t+{dt:.1f}s)")
+            except Exception:
+                pass
+
     def flush(self) -> None:
         if self._tb is not None:
             self._tb.flush()
