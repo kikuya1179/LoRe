@@ -591,13 +591,20 @@ class UncertaintyGate:
         log_probs = F.log_softmax(logits, dim=-1)
         probs = torch.exp(log_probs)
         entropy = -(probs * log_probs).sum(dim=-1)  # [B]
+        entropy = torch.nan_to_num(entropy, nan=0.0, posinf=0.0, neginf=0.0)
         entropy_normalized = entropy / (entropy.max() + 1e-8)
         
         # 2. Value variance (estimate with small noise perturbation)
         if values.dim() > 1:
             values = values.squeeze(-1)
         noise = torch.randn_like(values) * 0.01
-        value_var = torch.var(values + noise, dim=0, keepdim=True)
+        # Use population variance (correction=0) to avoid NaN when batch size == 1
+        try:
+            value_var = torch.var(values + noise, dim=0, correction=0, keepdim=True)
+        except TypeError:
+            # Older PyTorch fallback (unbiased=False)
+            value_var = torch.var(values + noise, dim=0, keepdim=True, unbiased=False)
+        value_var = torch.nan_to_num(value_var, nan=0.0, posinf=0.0, neginf=0.0)
         value_var = value_var.expand(batch_size)  # Broadcast to batch
         
         # 3. Model disagreement/error (if available)
@@ -607,12 +614,26 @@ class UncertaintyGate:
                 model_uncertainty = model_uncertainty.expand(batch_size)
         else:
             model_uncertainty = torch.zeros(batch_size, device=device)
+        model_uncertainty = torch.nan_to_num(model_uncertainty, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # Update EMAs for normalization
-        self.entropy_ema = self.ema_decay * self.entropy_ema + (1 - self.ema_decay) * entropy.mean()
-        self.value_var_ema = self.ema_decay * self.value_var_ema + (1 - self.ema_decay) * value_var.mean()
-        if model_error is not None:
-            self.model_error_ema = self.ema_decay * self.model_error_ema + (1 - self.ema_decay) * model_uncertainty.mean()
+        # Update EMAs for normalization (no grad; detach source means)
+        with torch.no_grad():
+            ent_mean = torch.nan_to_num(entropy.mean().detach(), nan=0.0, posinf=0.0, neginf=0.0)
+            val_mean = torch.nan_to_num(value_var.mean().detach(), nan=0.0, posinf=0.0, neginf=0.0)
+            self.entropy_ema = torch.nan_to_num(
+                self.ema_decay * self.entropy_ema + (1 - self.ema_decay) * ent_mean,
+                nan=self.entropy_ema.item(), posinf=self.entropy_ema.item(), neginf=self.entropy_ema.item()
+            )
+            self.value_var_ema = torch.nan_to_num(
+                self.ema_decay * self.value_var_ema + (1 - self.ema_decay) * val_mean,
+                nan=self.value_var_ema.item(), posinf=self.value_var_ema.item(), neginf=self.value_var_ema.item()
+            )
+            if model_error is not None:
+                mod_mean = torch.nan_to_num(model_uncertainty.mean().detach(), nan=0.0, posinf=0.0, neginf=0.0)
+                self.model_error_ema = torch.nan_to_num(
+                    self.ema_decay * self.model_error_ema + (1 - self.ema_decay) * mod_mean,
+                    nan=self.model_error_ema.item(), posinf=self.model_error_ema.item(), neginf=self.model_error_ema.item()
+                )
         
         # Normalize and combine uncertainty sources
         entropy_norm = entropy / (self.entropy_ema + 1e-8)
@@ -621,6 +642,7 @@ class UncertaintyGate:
         
         # Weighted combination of uncertainty sources
         uncertainty = 0.5 * entropy_norm + 0.3 * value_var_norm + 0.2 * model_uncertainty_norm
+        uncertainty = torch.nan_to_num(uncertainty, nan=0.0, posinf=0.0, neginf=0.0)
         
         return torch.clamp(uncertainty, 0.0, 2.0)
     
@@ -636,13 +658,14 @@ class UncertaintyGate:
             kl_mean = kl_divergence.mean()
         else:
             kl_mean = kl_divergence
-            
-        # Lagrange multiplier update: increase λ if KL > target, decrease if KL < target
-        kl_error = kl_mean - self.delta_target
-        self.lambda_kl = torch.clamp(
-            self.lambda_kl + self.kl_lr * kl_error,
-            0.0, 10.0  # Reasonable bounds for λ
-        )
+        # Use detached mean and update without building a graph
+        with torch.no_grad():
+            kl_mean_det = kl_mean.detach()
+            kl_error = kl_mean_det - self.delta_target
+            self.lambda_kl = torch.clamp(
+                self.lambda_kl + self.kl_lr * kl_error,
+                0.0, 10.0
+            )
         
         # Track history for monitoring
         self.kl_history.append(float(kl_mean.detach()))

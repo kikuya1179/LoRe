@@ -328,4 +328,90 @@ class EnhancedLogger:
                 'performance_improvement': llm_metrics.get('llm/performance_improvement', 0.0),
                 'active_subgoals': llm_metrics.get('llm/active_subgoals', 0),
             },
-        }\n        \n        # Write detailed report\n        report_path = self.log_dir / f\"summary_report_{step}.json\"\n        with open(report_path, 'w') as f:\n            json.dump(summary, f, indent=2)\n        \n        return summary\n    \n    def _write_json_log(self, entry: Dict[str, Any]) -> None:\n        \"\"\"Write JSON log entry.\"\"\"\n        with open(self.json_log_path, 'a') as f:\n            json.dump(entry, f)\n            f.write('\\n')\n    \n    def flush(self) -> None:\n        \"\"\"Flush all logs.\"\"\"\n        if self.writer:\n            self.writer.flush()\n    \n    def close(self) -> None:\n        \"\"\"Close logger.\"\"\"\n        if self.writer:\n            self.writer.close()\n\n\ndef create_comparison_dashboard(log_dirs: List[str], output_path: str) -> None:\n    \"\"\"Create comparison dashboard between different runs.\"\"\"\n    import matplotlib.pyplot as plt\n    \n    fig, axes = plt.subplots(2, 3, figsize=(18, 12))\n    fig.suptitle('LLM-Enhanced RL Comparison Dashboard', fontsize=16)\n    \n    colors = ['blue', 'red', 'green', 'orange', 'purple']\n    \n    for i, log_dir in enumerate(log_dirs[:5]):  # Limit to 5 runs\n        metrics_file = Path(log_dir) / \"metrics.jsonl\"\n        if not metrics_file.exists():\n            continue\n        \n        # Load metrics\n        data = []\n        with open(metrics_file, 'r') as f:\n            for line in f:\n                data.append(json.loads(line))\n        \n        if not data:\n            continue\n        \n        steps = [entry['step'] for entry in data]\n        returns = [entry['episode_return'] for entry in data]\n        success = [entry['success'] for entry in data]\n        llm_usage = [entry['llm_usage'] for entry in data]\n        \n        label = f'Run {i+1}'\n        color = colors[i % len(colors)]\n        \n        # Episode returns\n        axes[0, 0].plot(steps, returns, color=color, label=label, alpha=0.7)\n        axes[0, 0].set_title('Episode Returns')\n        axes[0, 0].set_xlabel('Steps')\n        axes[0, 0].set_ylabel('Return')\n        \n        # Success rate (moving average)\n        if len(success) >= 100:\n            success_ma = [np.mean(success[max(0, j-100):j+1]) for j in range(len(success))]\n            axes[0, 1].plot(steps, success_ma, color=color, label=label)\n        axes[0, 1].set_title('Success Rate (100-episode MA)')\n        axes[0, 1].set_xlabel('Steps')\n        axes[0, 1].set_ylabel('Success Rate')\n        \n        # LLM usage\n        axes[0, 2].plot(steps, llm_usage, color=color, label=label, alpha=0.7)\n        axes[0, 2].set_title('LLM Usage Rate')\n        axes[0, 2].set_xlabel('Steps')\n        axes[0, 2].set_ylabel('Usage Rate')\n    \n    # Add legends\n    for ax in axes.flat:\n        ax.legend()\n        ax.grid(True, alpha=0.3)\n    \n    plt.tight_layout()\n    plt.savefig(output_path, dpi=300, bbox_inches='tight')\n    plt.close()\n    \n    print(f\"Comparison dashboard saved to {output_path}\")
+        }
+        
+        # Write detailed report
+        report_path = self.log_dir / f"summary_report_{step}.json"
+        with open(report_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        return summary
+    
+    def _write_json_log(self, entry: Dict[str, Any]) -> None:
+        """Write JSON log entry."""
+        with open(self.json_log_path, 'a') as f:
+            json.dump(entry, f)
+            f.write('\n')
+    
+    def flush(self) -> None:
+        """Flush all logs."""
+        if self.writer:
+            self.writer.flush()
+    
+    def close(self) -> None:
+        """Close logger."""
+        if self.writer:
+            self.writer.close()
+
+
+def create_comparison_dashboard(log_dirs: List[str], output_path: str) -> None:
+    """Create comparison dashboard between different runs."""
+    import matplotlib.pyplot as plt
+    
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle('LLM-Enhanced RL Comparison Dashboard', fontsize=16)
+    
+    colors = ['blue', 'red', 'green', 'orange', 'purple']
+    
+    for i, log_dir in enumerate(log_dirs[:5]):  # Limit to 5 runs
+        metrics_file = Path(log_dir) / "metrics.jsonl"
+        if not metrics_file.exists():
+            continue
+        
+        # Load metrics
+        data = []
+        with open(metrics_file, 'r') as f:
+            for line in f:
+                data.append(json.loads(line))
+        
+        if not data:
+            continue
+        
+        steps = [entry['step'] for entry in data]
+        returns = [entry['episode_return'] for entry in data]
+        success = [entry['success'] for entry in data]
+        llm_usage = [entry['llm_usage'] for entry in data]
+        
+        label = f'Run {i+1}'
+        color = colors[i % len(colors)]
+        
+        # Episode returns
+        axes[0, 0].plot(steps, returns, color=color, label=label, alpha=0.7)
+        axes[0, 0].set_title('Episode Returns')
+        axes[0, 0].set_xlabel('Steps')
+        axes[0, 0].set_ylabel('Return')
+        
+        # Success rate (moving average)
+        if len(success) >= 100:
+            success_ma = [np.mean(success[max(0, j-100):j+1]) for j in range(len(success))]
+            axes[0, 1].plot(steps, success_ma, color=color, label=label)
+        axes[0, 1].set_title('Success Rate (100-episode MA)')
+        axes[0, 1].set_xlabel('Steps')
+        axes[0, 1].set_ylabel('Success Rate')
+        
+        # LLM usage
+        axes[0, 2].plot(steps, llm_usage, color=color, label=label, alpha=0.7)
+        axes[0, 2].set_title('LLM Usage Rate')
+        axes[0, 2].set_xlabel('Steps')
+        axes[0, 2].set_ylabel('Usage Rate')
+    
+    # Add legends
+    for ax in axes.flat:
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Comparison dashboard saved to {output_path}")

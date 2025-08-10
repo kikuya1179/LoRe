@@ -27,4 +27,40 @@ LoRe (DreamerV3 + LLM(Gemini 2.5) + Crafter) セットアップ手順 (Windows P
 
 $Env:GEMINI_API_KEY = "<YOUR_KEY>"
 
+### 結論
+- 今の実装で回せます。まずは短めで動作確認→1Mへ拡大が安全。
+- 推奨: 50k→100kで指標確認、問題なければ1Mに。
 
+### 推奨手順（PowerShell）
+1) スモーク（5万）
+```powershell
+$ts = Get-Date -Format yyyyMMdd_HHmmss
+python -m LoRe.main --total_frames 50000 --device cuda --log_dir "runs\lore_smoke_$ts"
+tensorboard --logdir runs
+```
+2) 拡大（10万）
+```powershell
+$ts = Get-Date -Format yyyyMMdd_HHmmss
+python -m LoRe.main --total_frames 100000 --device cuda --log_dir "runs\lore_100k_$ts"
+```
+3) 本番（100万）
+```powershell
+$ts = Get-Date -Format yyyyMMdd_HHmmss
+python -m LoRe.main --total_frames 1000000 --device cuda --log_dir "runs\lore_1M_$ts"
+```
+
+### 合格ライン（進めてOKの目安）
+- llm/calls_total: 100k時点で≪500（クールダウン効いている）
+- llm/avg_steps_between_calls: ≈ 2000 前後
+- llm/cache_hit_rate: 時間とともに上昇（> 0.1→0.3+）
+- llm/priornet_usage_rate: > 0（徐々に増加）
+- llm/errors_total: 低く安定
+
+### LLM設定
+- その場の設定でOK（`$Env:GEMINI_API_KEY` 済）。永続化したい場合は:
+```powershell
+setx GEMINI_API_KEY "<YOUR_API_KEY>"
+```
+- gemini CLI未使用なら `LoRe/conf.py` の `llm_use_cli: bool = False` を推奨。
+
+- 進捗: 現状の実装でテスト可。まず50k→100kでメトリクス確認後、1Mへ拡大する運用を提示。合格ラインとコマンドを最小で整理。

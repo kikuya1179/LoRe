@@ -11,6 +11,7 @@ class EnvConfig:
     frame_stack: int = 4
     norm_obs: bool = False
     action_repeat: int = 1
+    num_envs: int = 8
 
 
 @dataclass
@@ -43,18 +44,40 @@ class TrainConfig:
     max_episode_steps: Optional[int] = 2000
     
     # Enhanced LLM Configuration
-    use_llm: bool = False
+    use_llm: bool = True
+    use_enhanced_trainer: bool = False
     llm_model: str = "gemini-2.5-flash-lite"
-    llm_use_cli: bool = True
+    llm_use_cli: bool = False
     llm_batch_size: int = 8
     llm_cache_size: int = 1000
     llm_use_dsl: bool = True
-    llm_timeout_s: float = 2.5
+    llm_timeout_s: float = 10.0
+    llm_api_retries: int = 3
+    # LLM call throttling
+    llm_beta_call_threshold: float = 0.5
+    llm_cooldown_steps: int = 1000
+    llm_call_budget_total: int = 500
+    llm_call_on_episode_boundary: bool = True
+    llm_min_macro_interval: int = 1500
+    llm_use_cache: bool = True
+    # PriorNet distillation
+    llm_priornet_enabled: bool = True
+    llm_priornet_update_every: int = 50
+    llm_priornet_hidden: int = 256
+    llm_priornet_lr: float = 1e-3
+    llm_priornet_temp: float = 2.0
+    # LLM context payloads
+    llm_send_latent: bool = True
+    llm_latent_dim: int = 32
+    llm_send_summary: bool = True
+    llm_send_image: bool = True
+    llm_image_size: int = 16
+    llm_image_single_channel: bool = True
     
     # LLM Triggers
     llm_novelty_threshold: float = 0.1
     llm_td_error_threshold: float = 0.5
-    llm_plateau_frames: int = 10000
+    llm_plateau_frames: int = 150
     
     # Reward Shaping
     reward_shaping_beta: float = 0.1
@@ -104,7 +127,7 @@ class ModelConfig:
     beta_max: float = 0.3  # Maximum β value for LLM mixing
     delta_target: float = 0.1  # Target KL divergence threshold
     kl_lr: float = 1e-3  # Learning rate for Lagrange multiplier
-    uncertainty_threshold: float = 0.5  # Threshold for uncertainty-based gating
+    uncertainty_threshold: float = 0.4  # Threshold for uncertainty-based gating
     use_value_ensemble: bool = False  # Enable value ensemble for uncertainty estimation
     
     # LoRe Synthetic Data Parameters
@@ -129,4 +152,13 @@ class Config:
 def load_config() -> Config:
     """Load default config (extend with argparse/YAML if needed)."""
     return Config()
+
+
+
+
+
+
+
+
+
 

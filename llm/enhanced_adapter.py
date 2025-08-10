@@ -20,8 +20,9 @@ class LLMAdapterConfigV2:
     enabled: bool = False
     model: str = "gemini-2.5-flash-lite"
     timeout_s: float = 2.5
+    api_retries: int = 2
     features_dim: int = 0
-    use_cli: bool = True
+    use_cli: bool = False
     cli_exe: str = "gemini"
     
     # Enhanced config
@@ -291,28 +292,41 @@ Example: {{"features": [0.5, -0.2], "r_shaped": 0.05, "confidence": 0.7, "mask":
         return results
     
     def _call_api_batch(self, prompts: List[str]) -> List[str]:
-        """Call API in batch mode."""
+        """Call API in batch mode with JSON forcing and simple retries."""
         if not self._client:
             return [""] * len(prompts)
-        
+
         def call_single(prompt: str) -> str:
-            try:
-                response = self._client.generate_content(prompt)
-                return getattr(response, 'text', '') or ''
-            except Exception:
-                return ""
-        
+            retries = max(1, int(getattr(self.cfg, 'api_retries', 2)))
+            last_err = None
+            for _ in range(retries):
+                try:
+                    # Try to force JSON
+                    try:
+                        from google.generativeai.types import GenerationConfig  # type: ignore
+                        gen_cfg = GenerationConfig(response_mime_type="application/json")
+                        response = self._client.generate_content(prompt, generation_config=gen_cfg)
+                    except Exception:
+                        response = self._client.generate_content(prompt)
+                    return getattr(response, 'text', '') or ''
+                except Exception as e:
+                    last_err = e
+                    try:
+                        import time as _t
+                        _t.sleep(0.1)
+                    except Exception:
+                        pass
+            return ""
+
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(call_single, prompt) for prompt in prompts]
-            results = []
-            
+            results: List[str] = []
             for future in futures:
                 try:
                     result = future.result(timeout=self.cfg.timeout_s)
                     results.append(result)
                 except (FutureTimeout, Exception):
                     results.append("")
-        
         return results
     
     def _process_response(self, response: str, obs: np.ndarray, 

@@ -82,18 +82,38 @@ python -m LoRe.main --total_frames 100000 --device cuda --log_dir runs/dreamer_b
 
 ### 3. LoRe統合実行（全機能有効）
 
+LoReは`conf.py`で設定駆動です（CLIフラグでは有効化しません）。まず`LoRe/conf.py`の`TrainConfig`を編集します。
+
+```python
+from LoRe.conf import load_config
+
+cfg = load_config()
+cfg.train.use_llm = True                  # Policy Prior(B) を有効化
+cfg.train.llm_timeout_s = 10.0            # APIタイムアウト
+cfg.train.llm_api_retries = 3             # APIリトライ
+cfg.train.llm_beta_call_threshold = 0.5   # βゲート阈値
+cfg.train.llm_cooldown_steps = 1000       # クールダウン
+cfg.train.llm_call_budget_total = 500     # 総コール上限
+cfg.train.llm_min_macro_interval = 1500   # マクロ間隔
+cfg.train.llm_call_on_episode_boundary = True
+cfg.train.llm_send_image = True           # 観測(16×16)を送信
+cfg.train.llm_send_latent = True          # 潜在h(32次元に圧縮)を送信
+cfg.train.llm_send_summary = True         # step/betaなどの要約を送信
+# Synthetic(A) / Options(C) を使う場合の推奨
+cfg.train.synthetic_ratio_max = 0.25
+cfg.model.enable_hierarchical_options = False
+```
+
+実行はシンプルです（設定は`conf.py`を読み込みます）。
+
 ```powershell
 # LLM API設定（Gemini）
 $Env:GEMINI_API_KEY = "your-api-key-here"
+# 任意: モデル指定（未設定なら conf.py の llm_model を使用）
+# $Env:GEMINI_MODEL = "gemini-2.5-flash-lite"
 
-# LoRe統合学習
-python -m LoRe.main `
-  --total_frames 500000 `
-  --device cuda `
-  --log_dir runs/lore_full `
-  --use_llm `
-  --enable_synthetic_replay `
-  --enable_hierarchical_options
+# 学習実行
+python -m LoRe.main --total_frames 500000 --device cuda --log_dir runs/lore_full
 ```
 
 ### 4. TensorBoard監視
@@ -116,9 +136,19 @@ class TrainConfig:
     batch_size: int = 256
     learning_rate: float = 3e-4
     
-    # LLM統合
-    use_llm: bool = False
+    # LLM統合（主要）
+    use_llm: bool = True
     llm_model: str = "gemini-2.5-flash-lite"
+    llm_timeout_s: float = 10.0
+    llm_api_retries: int = 3
+    llm_beta_call_threshold: float = 0.5
+    llm_cooldown_steps: int = 1000
+    llm_call_budget_total: int = 500
+    llm_min_macro_interval: int = 1500
+    llm_call_on_episode_boundary: bool = True
+    llm_send_image: bool = True
+    llm_send_latent: bool = True
+    llm_send_summary: bool = True
     
     # A) 合成リプレイ
     synthetic_ratio_max: float = 0.25
@@ -132,6 +162,16 @@ class TrainConfig:
     max_options: int = 8
     option_generation_interval: int = 500
 ```
+
+### LLM設定のポイント（コール削減 ≤500/1M）
+
+- **βゲート+クールダウン**: `llm_beta_call_threshold`, `llm_cooldown_steps`
+- **総コール上限**: `llm_call_budget_total`
+- **マクロ境界のみ**: `llm_call_on_episode_boundary=True`, `llm_min_macro_interval`
+- **キャッシュ/蒸留**: `llm_use_cache=True`, `llm_priornet_enabled=True`
+- **タイムアウト/再試行**: `llm_timeout_s`, `llm_api_retries`
+
+目安: `cooldown_steps≈2000` で理論上 1e6/2000 ≈ 500回。キャッシュ/蒸留でさらなる削減が可能。
 
 ### 段階的有効化
 
@@ -157,14 +197,15 @@ config.model.max_options = 8
 
 ### パフォーマンス指標
 
-```python
-# TensorBoard メトリクス
-- env/episode_return          # エピソード報酬
-- loss/policy, loss/value     # 方策・価値損失
-- uncertainty_gate/avg_kl     # KL制約状況
-- synthetic/ratio             # 合成データ比率
-- options/avg_success_rate    # オプション成功率
-- llm_adapter/cache_hit_rate  # LLM効率性
+```text
+env/*
+loss/*
+uncertainty/*, uncertainty_gate/*
+beta/*
+llm/calls_total, llm/cache_hit_rate, llm/errors_total
+llm/avg_steps_between_calls, llm/avg_beta_when_call
+llm/priornet_usage_rate, llm/priornet_distill_loss
+synthetic/*, options/*
 ```
 
 ---
@@ -294,10 +335,16 @@ config.model.delta_target = 0.05
 config.train.synthetic_ratio_max = 0.15
 ```
 
-**LLMレスポンス遅延**
-```python  
-config.train.llm_timeout_s = 1.5      # タイムアウト短縮
-config.train.llm_cache_size = 2000     # キャッシュ拡大
+**LLM疎通/安定化**
+```powershell
+# APIキー
+$Env:GEMINI_API_KEY
+
+# デバッグログ有効化（詳細）
+$Env:LORE_DEBUG_LLM = "1"
+
+# タイムアウト/再試行の調整
+# conf.py: llm_timeout_s, llm_api_retries
 ```
 
 **オプション性能低下**

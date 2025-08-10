@@ -1,5 +1,6 @@
 from dataclasses import asdict
 from typing import Optional
+from types import SimpleNamespace
 
 
 def _patch_numpy_for_gym() -> None:
@@ -97,6 +98,10 @@ def make_crafter_env(env_cfg) -> "torchrl.envs.EnvBase":  # type: ignore[name-de
     except Exception as e:
         raise RuntimeError("TorchRL is required. `pip install torchrl`") from e
 
+    # allow dict config
+    if isinstance(env_cfg, dict):
+        env_cfg = SimpleNamespace(**env_cfg)
+
     # Gym 環境生成
     env_id = getattr(env_cfg, "name", "CrafterReward-v1")
     try:
@@ -143,6 +148,62 @@ def make_crafter_env(env_cfg) -> "torchrl.envs.EnvBase":  # type: ignore[name-de
     if obs_key != "observation":
         tfs.append(RenameTransform(in_keys=[obs_key], out_keys=["observation"]))
 
-    env = TransformedEnv(base, Compose(*tfs))
+    env_single = TransformedEnv(base, Compose(*tfs))
+
+    # Vectorize if requested
+    try:
+        n_envs = int(getattr(env_cfg, "num_envs", 1))
+    except Exception:
+        n_envs = 1
+
+    if n_envs <= 1:
+        return env_single
+
+    try:
+        from torchrl.envs import ParallelEnv
+    except Exception as e:  # pragma: no cover
+        # Fallback to single env if ParallelEnv is not available
+        return env_single
+
+    def _make_one():
+        # Recreate a fresh single env for each worker (share same cfg)
+        # Inline build to avoid recursion and attribute issues
+        try:
+            _patch_numpy_for_gym()
+            import gym
+            import crafter  # noqa: F401
+            from torchrl.envs import GymWrapper
+            from torchrl.envs.transforms import (
+                TransformedEnv, Compose, ToTensorImage, GrayScale, Resize, CatFrames, RenameTransform
+            )
+        except Exception as e:
+            raise e
+        base_gym = gym.make(getattr(env_cfg, 'name', 'CrafterReward-v1'))
+        try:
+            base_gym = base_gym.unwrapped
+        except Exception:
+            pass
+        base_gym = _GymToGymnasiumV26(base_gym)
+        base = GymWrapper(base_gym)
+        try:
+            keys = set(base.observation_spec.keys(True, True))
+        except Exception:
+            keys = {"observation"}
+        obs_key = "pixels" if "pixels" in keys else "observation"
+        tfs = [ToTensorImage(in_keys=[obs_key])]
+        if getattr(env_cfg, 'grayscale', True):
+            tfs.append(GrayScale(in_keys=[obs_key]))
+        img_size = int(getattr(env_cfg, 'image_size', 64))
+        if img_size and img_size > 0:
+            tfs.append(Resize(img_size, img_size, in_keys=[obs_key]))
+        frame_stack = int(getattr(env_cfg, 'frame_stack', 1))
+        if frame_stack and frame_stack > 1:
+            tfs.append(CatFrames(N=frame_stack, dim=-3, in_keys=[obs_key]))
+        if obs_key != "observation":
+            tfs.append(RenameTransform(in_keys=[obs_key], out_keys=["observation"]))
+        return TransformedEnv(base, Compose(*tfs))
+
+    # Build n_envs workers
+    env = ParallelEnv(n_envs, _make_one)
     return env
 

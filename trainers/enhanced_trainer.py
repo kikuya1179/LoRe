@@ -6,6 +6,7 @@ import os
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
 import torch
+import numpy as np
 
 from ..utils.synthetic_replay import EnhancedReplayBuffer
 from ..utils.synthetic_generator import SyntheticExperienceGenerator
@@ -40,11 +41,12 @@ class EnhancedTrainer(Trainer):
                 enabled=getattr(cfg.train, "use_llm", False),
                 model=getattr(cfg.train, "llm_model", "gemini-2.5-flash-lite"),
                 features_dim=getattr(cfg.model, "llm_features_dim", 0),
-                use_cli=getattr(cfg.train, "llm_use_cli", True),
+                use_cli=getattr(cfg.train, "llm_use_cli", False),
                 batch_size=getattr(cfg.train, "llm_batch_size", 8),
                 cache_size=getattr(cfg.train, "llm_cache_size", 1000),
                 use_dsl=getattr(cfg.train, "llm_use_dsl", True),
                 timeout_s=getattr(cfg.train, "llm_timeout_s", 2.5),
+                api_retries=int(getattr(cfg.train, "llm_api_retries", 2)),
                 novelty_threshold=getattr(cfg.train, "llm_novelty_threshold", 0.1),
                 td_error_threshold=getattr(cfg.train, "llm_td_error_threshold", 0.5),
                 plateau_frames=getattr(cfg.train, "llm_plateau_frames", 10000),
