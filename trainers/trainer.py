@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Any
+import time
 
 import torch
 
 from ..utils.replay import make_replay
 from ..utils.llm_adapter import LLMAdapter, LLMAdapterConfig
 from ..utils.rnd import RND
+from ..utils.hw_trace import log_event, set_log_path as hw_set_log_path, set_current_step as hw_set_step
 
 
 class Trainer:
@@ -17,9 +19,20 @@ class Trainer:
         self.logger = logger
         self.cfg = cfg
         self.device = device
+        
+        # GPU monitoring setup
+        if device.type == "cuda":
+            print(f"[GPU] Trainer initialized on {device}")
+            self._gpu_monitoring = True
+        else:
+            self._gpu_monitoring = False
 
         # Replay buffer (TorchRL TensorDict-based)
-        self.replay = make_replay(capacity=cfg.train.replay_capacity)
+        # Use standard replay buffer
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.replay = make_replay(capacity=cfg.train.replay_capacity)
 
         # Specs
         try:
@@ -33,6 +46,12 @@ class Trainer:
         self._last_td = td
 
         self.global_step = 0
+        # HW trace file setup (default under log_dir)
+        try:
+            log_dir = getattr(self.cfg, 'log_dir', 'runs/dreamer_crafter')
+            hw_set_log_path(f"{log_dir}/hw_trace.txt")
+        except Exception:
+            pass
 
         # Determine number of parallel environments (batch size)
         try:
@@ -146,7 +165,7 @@ class Trainer:
         return obs.to(self.device, non_blocking=True)
 
     def _append_to_replay(self, prev_td, action, next_td, llm_out: dict | None):
-        # Build tensordict samples; supports vector env by iterating env dimension if present
+        # Build tensordict samples; vectorized path prefers single batched extend() for速度
         try:
             from tensordict import TensorDict  # TorchRL 0.9+ は独立パッケージ提供
         except Exception:  # pragma: no cover
@@ -192,39 +211,113 @@ class Trainer:
             _env_batch_size(rew, obs_like=False),
             _env_batch_size(done, obs_like=False),
         )
-        for i in range(n):
-            o_prev = prev_obs[i] if isinstance(prev_obs, torch.Tensor) and prev_obs.ndim > 3 else prev_obs
-            o_next = next_obs[i] if isinstance(next_obs, torch.Tensor) and next_obs.ndim > 3 else next_obs
-            a_i = act[i] if isinstance(act, torch.Tensor) and act.ndim > 1 else act
-            r_i = rew[i] if isinstance(rew, torch.Tensor) and rew.ndim > 0 else rew
-            d_i = done[i] if isinstance(done, torch.Tensor) and done.ndim > 0 else done
+        # Vectorized fast-path if batch > 1
+        if n > 1 and isinstance(prev_obs, torch.Tensor) and prev_obs.ndim > 3:
+            # Helper: ensure (n,1) column tensor with desired dtype
+            def _as_column(x: torch.Tensor, n_envs: int, dtype: torch.dtype | None = None) -> torch.Tensor:
+                if not isinstance(x, torch.Tensor):
+                    x = torch.as_tensor(x)
+                if dtype is not None:
+                    x = x.to(dtype)
+                # Scalar -> repeat (n,1)
+                if x.numel() == 1:
+                    return x.view(1, 1).repeat(n_envs, 1)
+                # 1D -> (n,1)
+                if x.ndim == 1:
+                    if x.shape[0] == n_envs:
+                        return x.view(n_envs, 1)
+                    if x.shape[0] == 1:
+                        return x.view(1, 1).repeat(n_envs, 1)
+                # 2D+ -> keep first column
+                if x.ndim >= 2:
+                    if x.shape[0] != n_envs:
+                        x = x.view(n_envs, -1)
+                    if x.shape[1] != 1:
+                        x = x[:, :1]
+                    return x
+                # Fallback
+                return x.view(n_envs, 1)
+            # To uint8 batched
+            def _to_uint8_b(x: torch.Tensor) -> torch.Tensor:
+                if x.dtype == torch.uint8:
+                    return x.cpu()
+                return x.clamp(0, 1).mul(255).to(torch.uint8).cpu()
+
+            o_prev_b = _to_uint8_b(prev_obs)
+            o_next_b = _to_uint8_b(next_obs) if isinstance(next_obs, torch.Tensor) and next_obs.ndim > 3 else _to_uint8_b(prev_obs)
+
+            a_b = _as_column(act if isinstance(act, torch.Tensor) else torch.as_tensor(act), n, dtype=torch.long)
+            r_b = _as_column(rew if isinstance(rew, torch.Tensor) else torch.as_tensor(rew), n, dtype=torch.float32)
+            d_b = _as_column(done if isinstance(done, torch.Tensor) else torch.as_tensor(done), n, dtype=torch.float32)
+
+            sample_b = TensorDict(
+                {
+                    "observation": o_prev_b,
+                    "action": a_b.cpu(),
+                    "reward": r_b.cpu(),
+                    "done": d_b.cpu(),
+                    "next": {"observation": o_next_b},
+                },
+                batch_size=[n],
+            )
+
+            # Batched LLM annotations
+            if llm_out is not None:
+                pl = llm_out.get("prior_logits") if isinstance(llm_out, dict) else None
+                cf = llm_out.get("confidence") if isinstance(llm_out, dict) else None
+                ft = llm_out.get("features") if isinstance(llm_out, dict) else None
+                if pl is not None:
+                    sample_b.set("llm_prior_logits", torch.as_tensor(pl).cpu())
+                if cf is not None:
+                    sample_b.set("llm_confidence", torch.as_tensor(cf).cpu())
+                if ft is not None and getattr(self.cfg.model, "llm_features_dim", 0) > 0:
+                    sample_b.set("llm_features", torch.as_tensor(ft).cpu())
+
+            # Single extend call
+            try:
+                self.replay.extend(sample_b)
+            except Exception:
+                # Fallback to add loop if backend lacks extend
+                for i in range(n):
+                    self.replay.add(sample_b[i])
+            return
+
+        # Fallback: per-env add (single)
+        o_prev = prev_obs if not (isinstance(prev_obs, torch.Tensor) and prev_obs.ndim > 3) else prev_obs[0]
+        o_next = next_obs if not (isinstance(next_obs, torch.Tensor) and next_obs.ndim > 3) else next_obs[0]
+        a_i = act if not (isinstance(act, torch.Tensor) and act.ndim > 1) else act[0]
+        r_i = rew if not (isinstance(rew, torch.Tensor) and rew.ndim > 0) else rew[0]
+        d_i = done if not (isinstance(done, torch.Tensor) and done.ndim > 0) else done[0]
+
+        def _to_uint8(x: torch.Tensor) -> torch.Tensor:
+            try:
+                if x.dtype == torch.uint8:
+                    return x.cpu()
+                return x.clamp(0, 1).mul(255).to(torch.uint8).cpu()
+            except Exception:
+                return x.cpu()
 
         sample = TensorDict(
             {
-                    "observation": o_prev.cpu(),
-                    "action": a_i.cpu(),
-                    "reward": r_i.cpu(),
-                    "done": d_i.cpu(),
-                    "next": {"observation": o_next.cpu()},
+                "observation": _to_uint8(o_prev) if isinstance(o_prev, torch.Tensor) else o_prev,
+                "action": a_i.cpu() if isinstance(a_i, torch.Tensor) else torch.tensor(a_i),
+                "reward": (r_i if isinstance(r_i, torch.Tensor) else torch.tensor(r_i)).to(torch.float32).cpu().view(1, -1),
+                "done": (d_i if isinstance(d_i, torch.Tensor) else torch.tensor(d_i)).to(torch.float32).cpu().view(1, -1),
+                "next": {"observation": _to_uint8(o_next) if isinstance(o_next, torch.Tensor) else o_next},
             },
             batch_size=[],
         )
 
-        # Optional LLM annotations, per-env slice if provided as batch
         if llm_out is not None:
-            import torch as _torch
             pl = llm_out.get("prior_logits") if isinstance(llm_out, dict) else None
             cf = llm_out.get("confidence") if isinstance(llm_out, dict) else None
             ft = llm_out.get("features") if isinstance(llm_out, dict) else None
             if pl is not None:
-                pli = pl[i] if isinstance(pl, torch.Tensor) and pl.dim() >= 2 else _torch.tensor(pl)
-                sample.set("llm_prior_logits", pli.cpu())
+                sample.set("llm_prior_logits", torch.as_tensor(pl).cpu())
             if cf is not None:
-                cfi = cf[i] if isinstance(cf, torch.Tensor) and cf.dim() >= 2 else _torch.tensor(cf)
-                sample.set("llm_confidence", cfi.cpu())
+                sample.set("llm_confidence", torch.as_tensor(cf).cpu())
             if ft is not None and getattr(self.cfg.model, "llm_features_dim", 0) > 0:
-                fti = ft[i] if isinstance(ft, torch.Tensor) and ft.dim() >= 2 else _torch.tensor(ft)
-                sample.set("llm_features", fti.cpu())
+                sample.set("llm_features", torch.as_tensor(ft).cpu())
 
         self.replay.add(sample)
 
@@ -245,101 +338,81 @@ class Trainer:
             obs = self._get_obs_tensor(td)
             # LLM 事前/特徴の取得（任意、失敗は無視） with throttling+cache
             llm_out = None
+            h_for_act = None
             try:
                 if getattr(self.cfg.train, "use_llm", False):
                     # Compute uncertainty & beta quickly from current policy (batch)
+                    t_enc = time.perf_counter()
                     with torch.no_grad():
                         z = self.agent._enc_cache(obs)
                         h, _ = self.agent.world.rssm(
                             z.unsqueeze(1), torch.zeros(1, z.size(0), z.size(-1), device=z.device)
                         )
                         h = h.squeeze(1)  # [N,latent]
+                        h_for_act = h
                         base_logits, uncertainty = self.agent.ac.policy_logits(
                             h, return_uncertainty=True
                         )
                         beta = self.agent.uncertainty_gate.compute_beta(uncertainty)  # [N]
+                    log_event('collect.encode_rssm', 'gpu', (time.perf_counter() - t_enc) * 1000.0)
 
                     import numpy as _np
                     n = h.size(0)
                     num_actions = int(getattr(self.agent, "n_actions", 0))
-                    # Prepare per-env outputs (default zeros)
-                    prior_logits_pack = torch.zeros(n, num_actions, dtype=torch.float32)
+                    # Prepare per-env outputs on GPU (default zeros)
+                    prior_logits_pack = torch.zeros(n, num_actions, dtype=torch.float32, device=self.device)
                     features_dim = int(getattr(self.cfg.model, "llm_features_dim", 0))
-                    features_pack = torch.zeros(n, features_dim, dtype=torch.float32) if features_dim > 0 else None
-                    conf_pack = torch.zeros(n, 1, dtype=torch.float32)
+                    features_pack = torch.zeros(n, features_dim, dtype=torch.float32, device=self.device) if features_dim > 0 else None
+                    conf_pack = torch.zeros(n, 1, dtype=torch.float32, device=self.device)
 
-                    # Build optional context per env (latent / summary / image) with debug logs
-                    context = None
-                    try:
-                        import os as _os
-                        _dbg_on = _os.environ.get("LORE_DEBUG_LLM", "0") in ("1", "true", "True")
-                        send_latent = bool(getattr(self.cfg.train, "llm_send_latent", True))
-                        send_summary = bool(getattr(self.cfg.train, "llm_send_summary", True))
-                        send_image = bool(getattr(self.cfg.train, "llm_send_image", True))
-                        latent_dim = int(getattr(self.cfg.train, "llm_latent_dim", 32))
-                        img_s = int(getattr(self.cfg.train, "llm_image_size", 16))
-                        single_ch = bool(getattr(self.cfg.train, "llm_image_single_channel", True))
-                        context = {"items": []}
-                        # latent projector (single shared) built on-demand
-                        if send_latent and not hasattr(self, "_llm_latent_proj"):
-                            in_d = h.size(-1)
-                            self._llm_latent_proj = torch.nn.Linear(in_d, latent_dim).to(self.device).eval()
-                        for i in range(n):
-                            item = {}
-                            if send_latent and hasattr(self, "_llm_latent_proj"):
-                                with torch.no_grad():
-                                    lp = self._llm_latent_proj(h[i:i+1]).squeeze(0).detach().cpu().float()
-                                item["latent"] = [float(v) for v in lp[:latent_dim]]
-                            if send_summary:
-                                item["summary"] = {
-                                    "step": int(self.global_step),
-                                    "no_reward_steps": int(self._no_reward_steps[i].item()) if i < self._no_reward_steps.numel() else 0,
-                                    "beta": float(beta[i].detach().cpu().item()) if i < beta.numel() else 0.0,
-                                }
-                            if send_image:
-                                try:
-                                    # downsample obs[i]: [C,H,W] expected
-                                    oi = obs[i] if obs.dim() >= 4 else obs
-                                    oi = torch.nn.functional.interpolate(oi.unsqueeze(0), size=(img_s, img_s), mode="area").squeeze(0)
-                                    if single_ch and oi.dim() == 3 and oi.shape[0] > 1:
-                                        oi = oi[:1]
-                                    oi = oi.clamp(0, 1).mul(255).to(torch.uint8).cpu().numpy()
-                                    item["image"] = oi.tolist()  # small size, keep as nested list
-                                except Exception:
-                                    pass
-                            context["items"].append(item)
-                        if _dbg_on:
-                            try:
-                                print(f"[Trainer] LLM context built items={len(context['items'])} latent_dim={latent_dim} img={img_s}x{img_s}")
-                            except Exception:
-                                pass
-                    except Exception:
-                        context = None
+                    # Pre-cache context config (build actual context lazily per selected env)
+                    import os as _os
+                    _dbg_on = _os.environ.get("LORE_DEBUG_LLM", "0") in ("1", "true", "True")
+                    send_latent = bool(getattr(self.cfg.train, "llm_send_latent", True))
+                    send_summary = bool(getattr(self.cfg.train, "llm_send_summary", True))
+                    send_image = bool(getattr(self.cfg.train, "llm_send_image", True))
+                    latent_dim = int(getattr(self.cfg.train, "llm_latent_dim", 32))
+                    img_s = int(getattr(self.cfg.train, "llm_image_size", 16))
+                    single_ch = bool(getattr(self.cfg.train, "llm_image_single_channel", True))
+                    # latent projector (single shared) built on-demand
+                    if send_latent and not hasattr(self, "_llm_latent_proj"):
+                        in_d = h.size(-1)
+                        self._llm_latent_proj = torch.nn.Linear(in_d, latent_dim).to(self.device).eval()
 
-                    # Build cache keys from latent per env
+                    # Pre-build cache keys using GPU batch operations
                     cache_keys = [None] * n
+                    cache_hashes = None
                     if self._llm_use_cache:
+                        try:
+                            # Batch normalize on GPU
+                            v_batch = h.detach().float()  # [N, latent]
+                            v_batch = v_batch / (v_batch.norm(dim=1, keepdim=True) + 1e-8)
+                            q_batch = (v_batch * 32.0).clamp(-127, 127).to(torch.int8)
+                            # Compute hash on GPU using simple sum (fast approximation)
+                            cache_hashes = torch.sum(q_batch * torch.arange(1, q_batch.size(1)+1, device=q_batch.device), dim=1)
+                            cache_hashes = cache_hashes.detach()  # Keep on GPU for now
+                        except Exception:
+                            cache_hashes = None
+
+                    # Try cache for each env using GPU hash lookup
+                    cached_mask = torch.zeros(n, dtype=torch.bool)
+                    if cache_hashes is not None:
+                        # Convert to hashable keys only when needed
                         for i in range(n):
                             try:
-                                v = h[i].detach().float()
-                                v = v / (v.norm() + 1e-8)
-                                q = (v * 32.0).clamp(-127, 127).to(torch.int8)
-                                cache_keys[i] = bytes(q.cpu().numpy().tobytes())
+                                hash_key = int(cache_hashes[i].item())  # Single .item() call
+                                if hash_key in self._llm_cache:
+                                    out = self._llm_cache[hash_key]
+                                    logits = torch.as_tensor(out.get("prior_logits"), dtype=torch.float32)
+                                    if logits.numel() == num_actions:
+                                        prior_logits_pack[i] = logits
+                                        cached_mask[i] = True
+                                        self._llm_cache_hits += 1
+                                    else:
+                                        self._llm_cache_misses += 1
+                                else:
+                                    self._llm_cache_misses += 1
                             except Exception:
-                                cache_keys[i] = None
-
-                    # Try cache for each env
-                    cached_mask = torch.zeros(n, dtype=torch.bool)
-                    for i in range(n):
-                        ck = cache_keys[i]
-                        if ck is not None and ck in self._llm_cache:
-                            out = self._llm_cache[ck]
-                            logits = torch.as_tensor(out.get("prior_logits"), dtype=torch.float32)
-                            if logits.numel() == num_actions:
-                                prior_logits_pack[i] = logits
-                                cached_mask[i] = True
-                                self._llm_cache_hits += 1
-                            else:
                                 self._llm_cache_misses += 1
 
                     # PriorNet fill for non-cached rows (usage rate計測)
@@ -350,7 +423,8 @@ class Trainer:
                             empty_rows = (prior_logits_pack.abs().sum(dim=1) == 0)
                             # opportunities: rows that were empty after cache
                             self._priornet_opportunities_total += int(empty_rows.sum().item())
-                            prior_logits_pack[empty_rows] = pn_logits[empty_rows].detach().cpu()
+                            # Keep PriorNet output on GPU
+                            prior_logits_pack[empty_rows] = pn_logits[empty_rows].detach()
                             self._priornet_used_total += int(empty_rows.sum().item())
                         except Exception:
                             pass
@@ -365,8 +439,8 @@ class Trainer:
                             bm = 0.3
                         thr = float(self._llm_beta_thr)
                         beta_threshold = thr * bm if thr <= 1.0 else thr
-                        beta_cpu = beta.detach().cpu()
-                        beta_ok = (beta_cpu >= beta_threshold)
+                        # Keep beta computation on GPU
+                        beta_ok = (beta >= beta_threshold)
                         # Macro boundary mask: episode start or plateau (respect config)
                         call_on_ep = bool(getattr(self.cfg.train, "llm_call_on_episode_boundary", True))
                         boundary_mask = self._just_reset.clone() if call_on_ep else torch.zeros_like(self._just_reset)
@@ -382,18 +456,47 @@ class Trainer:
                         # Prefer API when we have boundary and not cached (priornet may already fill, but API can overwrite one row for higher fidelity)
                         candidates = (~cached_mask) & cooldown_ok & beta_ok & boundary_mask
                         if candidates.any():
-                            # Pick highest beta among candidates
-                            beta_sel = beta_cpu.masked_fill(~candidates, -1e9)
-                            idx = int(torch.argmax(beta_sel).item())
+                            # Pick highest beta among candidates (GPU operations)
+                            beta_sel = beta.masked_fill(~candidates, -1e9)
+                            idx = int(torch.argmax(beta_sel).item())  # Only one .item() call
                             try:
-                                obs_i = obs[idx:idx+1].detach().cpu().numpy()
+                                # Build context for selected env only (GPU operations first)
                                 ctx_i = None
                                 try:
-                                    if context and isinstance(context, dict) and "items" in context and len(context["items"]) > idx:
-                                        ctx_i = {"items": [context["items"][idx]]}
+                                    item = {}
+                                    if send_latent and hasattr(self, "_llm_latent_proj"):
+                                        with torch.no_grad():
+                                            lp_gpu = self._llm_latent_proj(h[idx:idx+1]).squeeze(0)  # Keep on GPU
+                                        # Convert to list only when finalizing context
+                                        item["latent"] = lp_gpu.detach().cpu().float()[:latent_dim].tolist()
+                                    if send_summary:
+                                        item["summary"] = {
+                                            "step": int(self.global_step),
+                                            "no_reward_steps": int(self._no_reward_steps[idx].item()) if idx < self._no_reward_steps.numel() else 0,
+                                            "beta": float(beta[idx].item()) if idx < beta.numel() else 0.0,
+                                        }
+                                    if send_image:
+                                        try:
+                                            # downsample obs[idx]: [C,H,W] expected
+                                            oi = obs[idx] if obs.dim() >= 4 else obs
+                                            oi = torch.nn.functional.interpolate(oi.unsqueeze(0), size=(img_s, img_s), mode="area").squeeze(0)
+                                            if single_ch and oi.dim() == 3 and oi.shape[0] > 1:
+                                                oi = oi[:1]
+                                            # Defer CPU conversion until context finalization
+                                            oi_gpu = oi.clamp(0, 1).mul(255).to(torch.uint8)
+                                            item["image"] = oi_gpu.cpu().numpy().tolist()  # small size, keep as nested list
+                                        except Exception:
+                                            pass
+                                    ctx_i = {"items": [item]}
+                                    if _dbg_on:
+                                        print(f"[Trainer] LLM context built for idx={idx} latent_dim={latent_dim} img={img_s}x{img_s}")
                                 except Exception:
-                                    ctx_i = context
+                                    ctx_i = None
+                                # Convert obs to numpy only at the last moment for LLM call
+                                obs_i = obs[idx:idx+1].detach().cpu().numpy()
+                                t_llm = time.perf_counter()
                                 out = self.llm.infer(obs_i, num_actions=num_actions, context=ctx_i)
+                                log_event('collect.llm_call', 'cpu', (time.perf_counter() - t_llm) * 1000.0)
                                 mask = out.get("mask", _np.zeros((1,), dtype=_np.float32))
                                 valid = bool((_np.asarray(mask).sum() > 0)) if mask is not None else True
                                 import os as _os
@@ -426,15 +529,15 @@ class Trainer:
                                     conf_pack[idx] = torch.as_tensor(cf, dtype=torch.float32).view(1, 1)
                                     # Update counters
                                     self._llm_intervals.append(int(self._llm_steps_since_call_env[idx].item()))
-                                    self._llm_beta_when_call.append(float(beta[idx].detach().cpu().item()))
+                                    self._llm_beta_when_call.append(float(beta[idx].item()))
                                     self._llm_calls_total += 1
                                     self._llm_call_budget -= 1
                                     self._llm_steps_since_call_env[idx] = 0
                                     self._llm_calls_env[idx] += 1
-                                    # Cache store
-                                    ck = cache_keys[idx]
-                                    if ck is not None:
-                                        self._llm_cache[ck] = out
+                                    # Cache store using GPU hash
+                                    if cache_hashes is not None:
+                                        hash_key = int(cache_hashes[idx].item())
+                                        self._llm_cache[hash_key] = out
                                 else:
                                     # Failure: cooldown applies even if invalid to avoid spamming
                                     self._llm_errors_total += 1
@@ -460,7 +563,6 @@ class Trainer:
                         "prior_logits": prior_logits_pack,
                         "features": features_pack if features_pack is not None else None,
                         "confidence": conf_pack,
-                        "_context": context,
                     }
             except Exception:
                 llm_out = None
@@ -471,12 +573,22 @@ class Trainer:
                     import torch as _torch
                     n = int(getattr(self.agent, "n_actions", 1))
                     batch_n = int(obs.shape[0]) if obs.dim() >= 4 else 1
+                    t_rand = time.perf_counter()
                     action = _torch.randint(low=0, high=n, size=(batch_n, 1), device=self.device)
+                    log_event('collect.rand_action', 'gpu', (time.perf_counter() - t_rand) * 1000.0)
                 else:
-                    action = self.agent.act(obs)
+                    # Reuse precomputed h from LLM processing if available
+                    t_act = time.perf_counter()
+                    if h_for_act is not None:
+                        action = self.agent.act(obs, precomputed_h=h_for_act)
+                    else:
+                        action = self.agent.act(obs)
+                    log_event('collect.act', 'gpu', (time.perf_counter() - t_act) * 1000.0)
             # TorchRL envs expect action within a tensordict
             td.set("action", action.cpu())
+            t_env = time.perf_counter()
             td = self.env.step(td)
+            log_event('collect.env_step', 'cpu', (time.perf_counter() - t_env) * 1000.0)
 
             # 集計（報酬・探索ボーナス適用前の平均も使う）
             try:
@@ -506,8 +618,10 @@ class Trainer:
                     else:
                         ri_n = ri
                     r += float(self.cfg.train.intrinsic_coef) * ri_n
-                    # Train predictor a bit
-                    _ = self._rnd.update(obs_i)
+                    # Train predictor with configurable frequency (default every 4 steps)
+                    intrinsic_update_every = int(getattr(self.cfg.train, "intrinsic_update_every", 4))
+                    if self.global_step % intrinsic_update_every == 0:
+                        _ = self._rnd.update(obs_i)
                 except Exception:
                     pass
             # Episode-wise accumulators (per-env)
@@ -646,10 +760,13 @@ class Trainer:
                 except Exception:
                     pass
 
+            t_rep = time.perf_counter()
             self._append_to_replay(self._last_td, action, td, llm_out)
+            log_event('collect.replay_add', 'cpu', (time.perf_counter() - t_rep) * 1000.0)
             self._last_td = td
 
             self.global_step += 1
+            hw_set_step(self.global_step)
             # Update per-env trackers
             try:
                 rew_vec = td.get(("next", "reward")) if ("next", "reward") in td.keys(True, True) else td.get("reward")
@@ -696,14 +813,47 @@ class Trainer:
         logs = {}
         for _ in range(updates):
             try:
+                t_samp = time.perf_counter()
                 batch = self.replay.sample(self.cfg.train.batch_size)
+                log_event('update.sample', 'cpu', (time.perf_counter() - t_samp) * 1000.0)
             except Exception:
                 break  # not enough samples yet
-            # move to device
-            for k in ["observation", "action", "reward"]:
-                if k in batch.keys(True, True):
-                    batch.set(k, batch.get(k).to(self.device))
+            # move to device with non-blocking transfer (pin CPU memory first if possible)
+            try:
+                if hasattr(batch, "pin_memory"):
+                    batch = batch.pin_memory()
+                # Try bulk transfer if supported
+                t_to = time.perf_counter()
+                batch = batch.to(self.device, non_blocking=True)
+                log_event('update.host_to_device', 'dma', (time.perf_counter() - t_to) * 1000.0)
+            except Exception:
+                # Fallback to individual key transfer
+                for k in ["observation", "action", "reward"]:
+                    if k in batch.keys(True, True):
+                        t = batch.get(k)
+                        try:
+                            t = t.pin_memory() if hasattr(t, 'pin_memory') else t
+                        except Exception:
+                            pass
+                        t0 = time.perf_counter()
+                        batch.set(k, t.to(self.device, non_blocking=True))
+                        log_event('update.host_to_device_key', 'dma', (time.perf_counter() - t0) * 1000.0, extras={'key': k})
+
+            # Decode uint8 observations to float on GPU
+            try:
+                if "observation" in batch.keys(True, True):
+                    obs_t = batch.get("observation")
+                    if obs_t.dtype == torch.uint8:
+                        batch.set("observation", obs_t.to(torch.float32).div_(255.0))
+                if ("next", "observation") in batch.keys(True, True):
+                    nxt = batch.get(("next", "observation"))
+                    if nxt.dtype == torch.uint8:
+                        batch.set(("next", "observation"), nxt.to(torch.float32).div_(255.0))
+            except Exception:
+                pass
+            t_upd = time.perf_counter()
             out = self.agent.update(batch)
+            log_event('update.agent', 'gpu', (time.perf_counter() - t_upd) * 1000.0)
             logs.update(out)
         return logs
 
@@ -800,5 +950,39 @@ class Trainer:
                         self.agent.save(path)
             except Exception:
                 pass
+            # GPU monitoring and logging (detailed)
+            if self._gpu_monitoring and self.global_step % 500 == 0 and torch.cuda.is_available():
+                try:
+                    dev = torch.cuda.current_device()
+                    name = torch.cuda.get_device_name(dev)
+                    props = torch.cuda.get_device_properties(dev)
+                    allocated = torch.cuda.memory_allocated(dev) / 1024**2
+                    reserved = torch.cuda.memory_reserved(dev) / 1024**2
+                    max_alloc = torch.cuda.max_memory_allocated(dev) / 1024**2
+                    # Utilization via nvidia-smi
+                    import subprocess
+                    util = 'N/A'
+                    mem_util = 'N/A'
+                    try:
+                        q = ['nvidia-smi','--query-gpu=utilization.gpu,utilization.memory','--format=csv,noheader,nounits']
+                        r = subprocess.run(q, capture_output=True, text=True, timeout=1)
+                        if r.returncode == 0 and r.stdout:
+                            parts = r.stdout.strip().split(',')
+                            if len(parts) >= 2:
+                                util = parts[0].strip()+'%'
+                                mem_util = parts[1].strip()+'%'
+                    except Exception:
+                        pass
+                    # Log scalars
+                    self.logger.add_scalar("gpu/alloc_mb", allocated, self.global_step)
+                    self.logger.add_scalar("gpu/reserved_mb", reserved, self.global_step)
+                    self.logger.add_scalar("gpu/max_alloc_mb", max_alloc, self.global_step)
+                    # Print brief status
+                    print(f"[GPU] step={self.global_step} dev={dev} {name} SMs={props.multi_processor_count} mem={allocated:.0f}/{reserved:.0f}MB util={util} mem_util={mem_util}")
+                except Exception:
+                    pass
+            
+            # Update logger step and flush with rate limiting
+            self.logger.set_current_step(self.global_step)
             self.logger.flush()
 

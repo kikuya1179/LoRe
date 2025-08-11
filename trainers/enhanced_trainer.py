@@ -290,7 +290,10 @@ class EnhancedTrainer(Trainer):
                     else:
                         ri_n = ri
                     r += float(self.cfg.train.intrinsic_coef) * ri_n
-                    _ = self._rnd.update(obs_i)
+                    # Train predictor with configurable frequency (default every 4 steps)
+                    intrinsic_update_every = int(getattr(self.cfg.train, "intrinsic_update_every", 4))
+                    if self.global_step % intrinsic_update_every == 0:
+                        _ = self._rnd.update(obs_i)
                     
                     # Track exploration bonus
                     self.exploration_bonuses.append(ri_n)
@@ -387,15 +390,20 @@ class EnhancedTrainer(Trainer):
             except Exception:
                 break
             
-            # Move to device
-            for k in ["observation", "action", "reward", "done"]:
-                if k in batch.keys(True, True):
-                    batch.set(k, batch.get(k).to(self.device))
-            
-            # Move LLM data to device
-            for k in batch.keys(True, True):
-                if k.startswith('llm_') or k.startswith('_'):
-                    batch.set(k, batch.get(k).to(self.device))
+            # Move to device with non-blocking transfer
+            try:
+                # Try bulk transfer if supported
+                batch = batch.to(self.device, non_blocking=True)
+            except Exception:
+                # Fallback to individual key transfer
+                for k in ["observation", "action", "reward", "done"]:
+                    if k in batch.keys(True, True):
+                        batch.set(k, batch.get(k).to(self.device, non_blocking=True))
+                
+                # Move LLM data to device
+                for k in batch.keys(True, True):
+                    if k.startswith('llm_') or k.startswith('_'):
+                        batch.set(k, batch.get(k).to(self.device, non_blocking=True))
             
             # Agent update
             out = self.agent.update(batch)

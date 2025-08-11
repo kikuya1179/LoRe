@@ -65,9 +65,21 @@ class Logger:
             except Exception:
                 pass
 
-    def flush(self) -> None:
+    def flush(self, force: bool = False) -> None:
+        # Rate-limit flush to avoid I/O bottleneck
+        if not force:
+            if not hasattr(self, '_last_flush_step'):
+                self._last_flush_step = 0
+            # Only flush every 500 steps by default
+            if hasattr(self, '_current_step') and (self._current_step - self._last_flush_step) < 500:
+                return
+            self._last_flush_step = getattr(self, '_current_step', 0)
         if self._tb is not None:
             self._tb.flush()
+    
+    def set_current_step(self, step: int) -> None:
+        """Update current step for flush rate limiting"""
+        self._current_step = step
 
     def close(self) -> None:
         try:

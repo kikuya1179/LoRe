@@ -5,13 +5,13 @@ from typing import Optional
 @dataclass
 class EnvConfig:
     name: str = "CrafterReward-v1"  # Gymnasium registry name
-    frame_skip: int = 4
+    frame_skip: int = 1
     grayscale: bool = True
-    image_size: int = 64
-    frame_stack: int = 4
+    image_size: int = 48
+    frame_stack: int = 3
     norm_obs: bool = False
     action_repeat: int = 1
-    num_envs: int = 8
+    num_envs: int = 4
 
 
 @dataclass
@@ -21,7 +21,7 @@ class TrainConfig:
     total_frames: int = 1_000_000  # Fixed typo
     init_random_frames: int = 10_000
     batch_size: int = 256
-    updates_per_collect: int = 100
+    updates_per_collect: int = 150
     collect_steps_per_iter: int = 1000
     replay_capacity: int = 10_000
     learning_rate: float = 3e-4
@@ -37,12 +37,13 @@ class TrainConfig:
     epsilon_greedy_decay_to: float = 0.05
     epsilon_greedy_decay_frames: int = 800_000
     # Intrinsic reward (RND)
-    use_intrinsic: bool = True
+    use_intrinsic: bool = False
     intrinsic_coef: float = 0.2
     intrinsic_norm: bool = True
     save_every_frames: int = 100_000
-    log_interval: int = 1000
+    log_interval: int = 4000
     max_episode_steps: Optional[int] = 2000
+    intrinsic_update_every: int = 8
     
     # Enhanced LLM Configuration
     use_llm: bool = False
@@ -88,17 +89,17 @@ class TrainConfig:
     reward_shaping_clip: float = 0.2
     
     # HER (Hindsight Experience Replay)
-    use_her: bool = True
-    her_ratio: float = 0.8
+    use_her: bool = False
+    her_ratio: float = 0.0
     
     # Priority Replay
-    use_priority_replay: bool = True
-    priority_alpha: float = 0.6
-    priority_beta: float = 0.4
+    use_priority_replay: bool = False
+    priority_alpha: float = 0.0
+    priority_beta: float = 0.0
     
     # Distillation
-    use_distillation: bool = True
-    distill_initial_alpha: float = 0.3
+    use_distillation: bool = False
+    distill_initial_alpha: float = 0.0
     distill_final_alpha: float = 0.01
     distill_every: int = 1000
     
@@ -108,7 +109,7 @@ class TrainConfig:
     synthetic_rollout_length: int = 5  # Maximum length of synthetic rollouts
     synthetic_confidence_threshold: float = 0.3  # Minimum confidence to generate synthetic data
     synthetic_success_threshold: float = 0.1  # Reward threshold for successful synthetic plans
-    synthetic_execution_prob: float = 0.2  # Probability of executing synthetic generation
+    synthetic_execution_prob: float = 0.0  # Disabled for speed
     synthetic_generation_interval: int = 100  # Steps between synthetic generation attempts
 
 

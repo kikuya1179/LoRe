@@ -64,3 +64,4 @@ setx GEMINI_API_KEY "<YOUR_API_KEY>"
 - gemini CLI未使用なら `LoRe/conf.py` の `llm_use_cli: bool = False` を推奨。
 
 - 進捗: 現状の実装でテスト可。まず50k→100kでメトリクス確認後、1Mへ拡大する運用を提示。合格ラインとコマンドを最小で整理。
+

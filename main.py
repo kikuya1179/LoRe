@@ -1,6 +1,12 @@
 import argparse
 import os
+import warnings
 from typing import Optional
+
+# Suppress common warnings for cleaner output
+warnings.filterwarnings("ignore", category=UserWarning, module="torchrl")
+warnings.filterwarnings("ignore", message=".*gym.*")
+warnings.filterwarnings("ignore", message=".*Gym.*")
 
 import torch
 
@@ -10,6 +16,7 @@ from .utils.logger import Logger
 from .envs.crafter_env import make_crafter_env
 from .agents.dreamer_v3 import DreamerV3Agent
 from .trainers.trainer import Trainer
+from .cuda_optimizer import setup_cuda_optimization, optimize_batch_size, warmup_cuda, print_gpu_status
 try:
     from .trainers.enhanced_trainer import EnhancedTrainer  # type: ignore
 except Exception:  # pragma: no cover
@@ -22,6 +29,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default=None, help="cuda or cpu")
     parser.add_argument("--log_dir", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    # Performance-related overrides
+    parser.add_argument("--updates_per_collect", type=int, default=None)
+    parser.add_argument("--collect_steps_per_iter", type=int, default=None)
+    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--num_envs", type=int, default=None)
+    parser.add_argument("--image_size", type=int, default=None)
+    parser.add_argument("--frame_stack", type=int, default=None)
     return parser.parse_args()
 
 
@@ -34,6 +48,19 @@ def override_cfg(cfg: Config, args: argparse.Namespace) -> Config:
         cfg.log_dir = args.log_dir
     if args.seed is not None:
         cfg.train.seed = args.seed
+    # Performance-related overrides
+    if getattr(args, "updates_per_collect", None) is not None:
+        cfg.train.updates_per_collect = int(args.updates_per_collect)
+    if getattr(args, "collect_steps_per_iter", None) is not None:
+        cfg.train.collect_steps_per_iter = int(args.collect_steps_per_iter)
+    if getattr(args, "batch_size", None) is not None:
+        cfg.train.batch_size = int(args.batch_size)
+    if getattr(args, "num_envs", None) is not None:
+        cfg.env.num_envs = int(args.num_envs)
+    if getattr(args, "image_size", None) is not None:
+        cfg.env.image_size = int(args.image_size)
+    if getattr(args, "frame_stack", None) is not None:
+        cfg.env.frame_stack = int(args.frame_stack)
     return cfg
 
 
@@ -43,7 +70,28 @@ def main() -> Optional[int]:
 
     set_seed(cfg.train.seed)
 
-    device = torch.device(cfg.train.device if torch.cuda.is_available() else "cpu")
+    # Setup CUDA with comprehensive optimization
+    if cfg.train.device == "cuda":
+        if not torch.cuda.is_available():
+            print("[FATAL] CUDA requested but not available!")
+            return 1
+        
+        # Apply CUDA optimizations
+        cuda_status = setup_cuda_optimization()
+        print_gpu_status()
+        print(f"[GPU] Applied optimizations: {', '.join(cuda_status['optimizations'])}")
+        
+        device = torch.device("cuda")
+        
+        # Optimize batch size based on GPU memory
+        cfg.train.batch_size = optimize_batch_size(cfg.train.batch_size, device)
+        
+        # CUDA warmup for faster first iteration
+        warmup_cuda(device)
+        
+    else:
+        device = torch.device("cpu")
+        print("[INFO] Using CPU device")
     # Allow only requested metrics
     allowed = {
         "env/episode_return",
@@ -59,7 +107,9 @@ def main() -> Optional[int]:
     logger = Logger(log_dir=cfg.log_dir, allowed_tags=allowed)
 
     try:
-        env = make_crafter_env(cfg.env)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            env = make_crafter_env(cfg.env)
     except Exception as e:
         import traceback
         print("[FATAL] Failed to create environment:", e)
@@ -84,6 +134,7 @@ def main() -> Optional[int]:
     except Exception:
         pass
 
+    # Create agent
     agent = DreamerV3Agent(
         cfg.model,
         action_spec=env.action_spec,
@@ -93,7 +144,13 @@ def main() -> Optional[int]:
         entropy_coef=getattr(cfg.train, "entropy_coef", 0.05),
         epsilon_greedy=getattr(cfg.train, "epsilon_greedy", 0.0),
     )
-    # expose lambda_kl to the agent for LLM prior regularization
+    
+    # GPU memory check
+    if device.type == "cuda":
+        allocated = torch.cuda.memory_allocated() / 1024**2
+        cached = torch.cuda.memory_reserved() / 1024**2
+        print(f"[GPU] Model loaded - Allocated: {allocated:.1f}MB, Cached: {cached:.1f}MB")
+    # Set lambda_kl for LLM prior regularization
     try:
         agent.lambda_kl = float(cfg.train.lambda_kl)
     except Exception:
@@ -110,7 +167,45 @@ def main() -> Optional[int]:
         device=device,
     )
 
+    # Final GPU verification before training
+    if device.type == "cuda":
+        print(f"\n[GPU] Starting training on {torch.cuda.get_device_name(0)}")
+        print(f"[GPU] Batch size: {cfg.train.batch_size}")
+        print(f"[GPU] Memory available: {(torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()) / 1024**2:.1f}MB")
+        
+        # Test GPU operations
+        with torch.no_grad():
+            test_tensor = torch.randn(100, 100, device=device)
+            _ = torch.mm(test_tensor, test_tensor)
+        print("[GPU] GPU operations verified")
+    
     trainer.train()
+    # Final hardware report (GPU/CPU/Memory/OS)
+    try:
+        import platform, psutil
+        print("\n===== HARDWARE SUMMARY =====")
+        print("OS:", platform.platform())
+        print("Python:", platform.python_version())
+        print("CPU:", platform.processor())
+        try:
+            cpu_count = psutil.cpu_count(logical=True)
+            load = psutil.cpu_percent(interval=0.2)
+            mem = psutil.virtual_memory()
+            print(f"CPU Cores(logical): {cpu_count}, Load: {load}%")
+            print(f"RAM: {mem.used/1024**3:.2f}GB used / {mem.total/1024**3:.2f}GB")
+        except Exception:
+            pass
+        if device.type == "cuda":
+            allocated = torch.cuda.memory_allocated() / 1024**2
+            cached = torch.cuda.memory_reserved() / 1024**2
+            max_allocated = torch.cuda.max_memory_allocated() / 1024**2
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"Allocated: {allocated:.1f}MB, Reserved: {cached:.1f}MB, Peak: {max_allocated:.1f}MB")
+            torch.cuda.empty_cache()
+        print("============================\n")
+    except Exception:
+        pass
+    
     return 0
 
 

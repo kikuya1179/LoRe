@@ -71,6 +71,55 @@ class _GymToGymnasiumV26:
         return self._env.close()
 
 
+class _ActionRepeatGymnasium:
+    """Simple action-repeat wrapper for Gymnasium-like API envs.
+
+    step(a) を n 回繰り返し、報酬を合算・早期終端に対応する。
+    """
+
+    def __init__(self, env, repeats: int = 1):
+        self._env = env
+        self._repeats = max(1, int(repeats))
+
+    @property
+    def action_space(self):
+        return getattr(self._env, "action_space", None)
+
+    @property
+    def observation_space(self):
+        return getattr(self._env, "observation_space", None)
+
+    @property
+    def unwrapped(self):
+        return getattr(self._env, "unwrapped", self._env)
+
+    def reset(self, *args, **kwargs):
+        return self._env.reset(*args, **kwargs)
+
+    def step(self, action, **kwargs):
+        total_reward = 0.0
+        info_agg = {}
+        obs = None
+        terminated = False
+        truncated = False
+        for _ in range(self._repeats):
+            obs, reward, term, trunc, info = self._env.step(action, **kwargs)
+            total_reward += float(reward)
+            terminated = bool(term)
+            truncated = bool(trunc)
+            # merge minimal info (last wins)
+            info_agg = info
+            if terminated or truncated:
+                break
+        return obs, total_reward, terminated, truncated, info_agg
+
+    def render(self, *args, **kwargs):
+        return self._env.render(*args, **kwargs)
+
+    def close(self):
+        return self._env.close()
+
+
 def make_crafter_env(env_cfg) -> "torchrl.envs.EnvBase":  # type: ignore[name-defined]
     """Crafter 環境を TorchRL の `TransformedEnv` として構築する。
 
@@ -126,6 +175,12 @@ def make_crafter_env(env_cfg) -> "torchrl.envs.EnvBase":  # type: ignore[name-de
 
     # Gym -> Gymnasium API 変換（簡易アダプタ）
     base_gym = _GymToGymnasiumV26(base_gym)
+
+    # Action repeat (CPU側の env.step 回数を削減)
+    frame_skip = int(getattr(env_cfg, "frame_skip", 1))
+    action_repeat = int(getattr(env_cfg, "action_repeat", frame_skip))
+    if action_repeat and action_repeat > 1:
+        base_gym = _ActionRepeatGymnasium(base_gym, repeats=action_repeat)
 
     # TorchRL の GymWrapper
     base = GymWrapper(base_gym)
@@ -192,6 +247,11 @@ def make_crafter_env(env_cfg) -> "torchrl.envs.EnvBase":  # type: ignore[name-de
         except Exception:
             pass
         base_gym = _GymToGymnasiumV26(base_gym)
+        # action repeat
+        frame_skip = int(getattr(env_cfg, 'frame_skip', 1))
+        action_repeat = int(getattr(env_cfg, 'action_repeat', frame_skip))
+        if action_repeat and action_repeat > 1:
+            base_gym = _ActionRepeatGymnasium(base_gym, repeats=action_repeat)
         base = GymWrapper(base_gym)
         try:
             keys = set(base.observation_spec.keys(True, True))

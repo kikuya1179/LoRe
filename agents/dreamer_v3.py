@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Optional, Tuple
 
 import torch
@@ -76,6 +77,19 @@ class WorldModel(nn.Module):
     def forward(self, obs_seq: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # obs_seq: [B, T, C, H, W]
         B, T = obs_seq.size(0), obs_seq.size(1)
+        
+        # Fast path for T=1 (single timestep)
+        if T == 1:
+            # Direct computation without loops
+            enc = self.encoder(obs_seq[:, 0])  # [B, latent]
+            h0 = torch.zeros(1, B, enc.size(-1), device=enc.device)
+            h_seq, _ = self.rssm(enc.unsqueeze(1), h0)  # [B,1,latent]
+            h = h_seq.squeeze(1)  # [B, latent]
+            recon = self.decoder(h).unsqueeze(1)  # [B,1,C,H,W]
+            reward_pred = self.reward_head(h).squeeze(-1)  # [B]
+            return h_seq, recon, reward_pred.unsqueeze(1)
+        
+        # General path for T > 1
         enc = []
         for t in range(T):
             enc.append(self.encoder(obs_seq[:, t]))
@@ -140,6 +154,13 @@ class ActorCritic(nn.Module):
                     h.size(0), self.feature_proj.out_features, device=h.device, dtype=h.dtype
                 )
             actor_input = torch.cat([h, llm_feat_proj], dim=-1)
+        # Align dtype to actor weights under autocast
+        try:
+            target_dtype = next(self.actor.parameters()).dtype
+            if actor_input.dtype != target_dtype:
+                actor_input = actor_input.to(target_dtype)
+        except StopIteration:
+            pass
         
         # Base world model policy logits
         logits_wm = self.actor(actor_input)
@@ -203,6 +224,13 @@ class ActorCritic(nn.Module):
 
     def value(self, h: torch.Tensor, return_ensemble: bool = False) -> torch.Tensor:
         """Compute value with optional ensemble for uncertainty estimation."""
+        # Align dtype to critic weights under autocast
+        try:
+            target_dtype = next(self.critic.parameters()).dtype
+            if h.dtype != target_dtype:
+                h = h.to(target_dtype)
+        except StopIteration:
+            pass
         base_value = self.critic(h).squeeze(-1)
         
         # Access critic_ensemble from agent reference if available
@@ -294,15 +322,70 @@ class DreamerV3Agent:
         else:
             self.critic_ensemble = None
 
+        # Include all components in parameters and ensure GPU placement
         self.params = list(self.world.parameters()) + list(self.ac.parameters())
+        if self.critic_ensemble is not None:
+            self.params += list(self.critic_ensemble.parameters())
         self.opt = torch.optim.Adam(self.params, lr=lr)
         self._enc_cache = ConvEncoder(in_channels=obs_channels, latent_dim=latent_dim)  # for single-step act
+        
+        # Force all components to device
         self.to(device)
+        # Store device reference for later use
+        self.device = device
+        
+        # Verify GPU placement safely
+        if device.type == "cuda":
+            gpu_components = []
+            try:
+                if next(self.world.parameters()).is_cuda:
+                    gpu_components.append("WorldModel")
+            except StopIteration:
+                pass
+            try:
+                if next(self.ac.parameters()).is_cuda:
+                    gpu_components.append("ActorCritic")
+            except StopIteration:
+                pass
+            try:
+                if next(self._enc_cache.parameters()).is_cuda:
+                    gpu_components.append("Encoder")
+            except StopIteration:
+                pass
+            try:
+                if self.critic_ensemble and next(self.critic_ensemble.parameters()).is_cuda:
+                    gpu_components.append("CriticEnsemble")
+            except StopIteration:
+                pass
+            print(f"[GPU] DreamerV3Agent components on GPU: {', '.join(gpu_components)}")
+
+        # AMP / GradScaler for CUDA acceleration
+        self._amp_enabled = device.type == "cuda"
+        try:
+            self._scaler = torch.amp.GradScaler('cuda', enabled=self._amp_enabled)
+        except Exception:
+            self._amp_enabled = False
+            self._scaler = None  # type: ignore
 
     def to(self, device: torch.device) -> None:
+        """Move all components to device with verification."""
+        # Move individual components (DreamerV3Agent doesn't inherit from nn.Module)
         self.world.to(device)
         self.ac.to(device)
         self._enc_cache.to(device)
+        self.uncertainty_gate.to(device)
+        if self.critic_ensemble is not None:
+            self.critic_ensemble.to(device)
+        
+        # Force move optimizer state if exists
+        if hasattr(self, 'opt') and len(self.opt.state) > 0:
+            for state in self.opt.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device)
+        
+        # Update stored device reference
+        self.device = device
 
     def save(self, path: str) -> None:
         state = {
@@ -327,13 +410,17 @@ class DreamerV3Agent:
         self.gamma = float(state.get("gamma", self.gamma))
 
     @torch.no_grad()
-    def act(self, obs: torch.Tensor) -> torch.Tensor:
+    def act(self, obs: torch.Tensor, precomputed_h: Optional[torch.Tensor] = None) -> torch.Tensor:
         # obs: [B,C,H,W]
         self.world.eval()
         self.ac.eval()
-        z = self._enc_cache(obs)
-        h, _ = self.world.rssm(z.unsqueeze(1), torch.zeros(1, obs.size(0), z.size(-1), device=obs.device))
-        h = h.squeeze(1)
+        if precomputed_h is not None:
+            # Use precomputed hidden state to avoid double encoding/RSSM
+            h = precomputed_h
+        else:
+            z = self._enc_cache(obs)
+            h, _ = self.world.rssm(z.unsqueeze(1), torch.zeros(1, obs.size(0), z.size(-1), device=obs.device))
+            h = h.squeeze(1)
         logits = self.ac.policy_logits(h)
         # ε-greedy: 少確率でランダム行動を混入
         if self.epsilon_greedy > 0.0:
@@ -372,27 +459,41 @@ class DreamerV3Agent:
         self.ac.train()
 
         # batch keys: observation [B,C,H,W], action [B,1], reward [B,1]; we reshape to sequences of T=1
-        obs = batch.get("observation").to(self.device)
-        actions = batch.get("action").to(self.device)
+        obs = batch.get("observation").to(self.device, non_blocking=True)
+        actions = batch.get("action").to(self.device, non_blocking=True)
         # 形状 [B] に正規化し、ロング型へ
         if actions.dtype != torch.long:
             actions = actions.to(torch.long)
         while actions.ndim > 1 and actions.shape[-1] == 1:
             actions = actions.squeeze(-1)
-        rewards = batch.get("reward").to(self.device).squeeze(-1)
-        dones = batch.get("done").to(self.device).squeeze(-1) if "done" in batch.keys(True, True) else None
+        rewards = batch.get("reward").to(self.device, non_blocking=True).squeeze(-1)
+        dones = batch.get("done").to(self.device, non_blocking=True).squeeze(-1) if "done" in batch.keys(True, True) else None
 
-        # Use a pseudo-sequence of length 1 for world model consistency
-        obs_seq = obs.unsqueeze(1)  # [B,1,C,H,W]
-        h_seq, recon_seq, reward_pred_seq = self.world(obs_seq)
-        h = h_seq[:, 0]
-        recon = recon_seq[:, 0]
-        reward_pred = reward_pred_seq[:, 0]
+        try:
+            autocast_ctx = torch.amp.autocast('cuda', enabled=self._amp_enabled)
+        except Exception:
+            # Fallback for older versions
+            from torch.cuda.amp import autocast as _old_autocast
+            autocast_ctx = _old_autocast(enabled=self._amp_enabled)
 
-        # Reconstruction loss (likelihood surrogate)
-        recon_loss = F.mse_loss(recon, obs)
-        # Reward prediction loss
-        reward_loss = F.mse_loss(reward_pred, rewards)
+        t_fwd = time.perf_counter()
+        with autocast_ctx:
+            # Use a pseudo-sequence of length 1 for world model consistency
+            obs_seq = obs.unsqueeze(1)  # [B,1,C,H,W]
+            h_seq, recon_seq, reward_pred_seq = self.world(obs_seq)
+            h = h_seq[:, 0]
+            recon = recon_seq[:, 0]
+            reward_pred = reward_pred_seq[:, 0]
+
+            # Reconstruction loss (likelihood surrogate)
+            if recon.shape[-2:] != obs.shape[-2:]:
+                # Resize obs to decoder output spatial size for a valid comparison
+                obs_for_loss = F.interpolate(obs, size=recon.shape[-2:], mode="area")
+            else:
+                obs_for_loss = obs
+            recon_loss = F.mse_loss(recon, obs_for_loss)
+            # Reward prediction loss
+            reward_loss = F.mse_loss(reward_pred, rewards)
 
         # Extract LLM data and compute enhanced integration
         llm_features = None
@@ -402,17 +503,17 @@ class DreamerV3Agent:
         beta_values = None
         
         if "llm_features" in batch.keys(True, True) and self.use_llm_features:
-            llm_features = batch.get("llm_features").to(self.device)
+            llm_features = batch.get("llm_features").to(self.device, non_blocking=True)
             if llm_features.numel() > 0:  # Check if not empty
                 # Normalize features to [-1, 1] range
                 llm_features = torch.clamp(llm_features, -3.0, 3.0) / 3.0
         
         if "llm_prior_logits" in batch.keys(True, True):
-            llm_logits = batch.get("llm_prior_logits").to(self.device)
+            llm_logits = batch.get("llm_prior_logits").to(self.device, non_blocking=True)
         
         if "llm_mask" in batch.keys(True, True):
             # Convert from RBExtra bitmask format if needed
-            mask_bits = batch.get("llm_mask").to(self.device)
+            mask_bits = batch.get("llm_mask").to(self.device, non_blocking=True)
             if mask_bits.dim() == 1:  # Bitmask format
                 llm_mask = self._bitmask_to_tensor(mask_bits, self.n_actions)
         
@@ -501,10 +602,31 @@ class DreamerV3Agent:
         loss_ac = policy_loss + 0.5 * value_loss - self.entropy_coef * entropy + kl_penalty
         loss = loss_model + loss_ac
 
+        fwd_ms = (time.perf_counter() - t_fwd) * 1000.0
+        try:
+            from ..utils.hw_trace import log_event as _hw_log
+            _hw_log('update.forward', 'gpu', fwd_ms)
+        except Exception:
+            pass
+
         self.opt.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.params, 10.0)
-        self.opt.step()
+        t_bwd = time.perf_counter()
+        if self._amp_enabled and getattr(self, "_scaler", None) is not None:
+            self._scaler.scale(loss).backward()
+            self._scaler.unscale_(self.opt)
+            torch.nn.utils.clip_grad_norm_(self.params, 10.0)
+            self._scaler.step(self.opt)
+            self._scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.params, 10.0)
+            self.opt.step()
+        bwd_ms = (time.perf_counter() - t_bwd) * 1000.0
+        try:
+            from ..utils.hw_trace import log_event as _hw_log
+            _hw_log('update.backward_step', 'gpu', bwd_ms)
+        except Exception:
+            pass
 
         # Collect enhanced metrics
         metrics = {
@@ -578,6 +700,13 @@ class UncertaintyGate:
         # Metrics tracking
         self.kl_history = []
         self.beta_history = []
+    
+    def to(self, device: torch.device) -> None:
+        """Move tensors to device."""
+        self.lambda_kl = self.lambda_kl.to(device)
+        self.entropy_ema = self.entropy_ema.to(device)
+        self.value_var_ema = self.value_var_ema.to(device)
+        self.model_error_ema = self.model_error_ema.to(device)
         
     def compute_uncertainty(self, logits: torch.Tensor, values: torch.Tensor, 
                           model_error: Optional[torch.Tensor] = None) -> torch.Tensor:
