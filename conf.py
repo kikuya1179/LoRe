@@ -44,7 +44,7 @@ class TrainConfig:
     max_episode_steps: Optional[int] = 2000
     
     # Enhanced LLM Configuration
-    use_llm: bool = True
+    use_llm: bool = False
     use_enhanced_trainer: bool = False
     llm_model: str = "gemini-2.5-flash-lite"
     llm_use_cli: bool = False
