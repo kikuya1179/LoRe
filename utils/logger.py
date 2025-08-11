@@ -6,9 +6,13 @@ from typing import Optional
 
 
 class Logger:
-    """Simple logger with optional TensorBoard support."""
+    """Simple logger with optional TensorBoard support and tag filtering.
 
-    def __init__(self, log_dir: str = "runs/dreamer_crafter") -> None:
+    Only tags in `allowed_tags` will be emitted. If `allowed_tags` is None, all
+    tags are emitted.
+    """
+
+    def __init__(self, log_dir: str = "runs/dreamer_crafter", *, allowed_tags: Optional[set[str]] = None) -> None:
         self.log_dir = log_dir
         os.makedirs(self.log_dir, exist_ok=True)
         self._tb = None
@@ -19,8 +23,17 @@ class Logger:
         except Exception:
             self._tb = None
         self._t0 = time.time()
+        # Whitelist for tags
+        self._allowed = allowed_tags
+
+    def _is_allowed(self, tag: str) -> bool:
+        if self._allowed is None:
+            return True
+        return tag in self._allowed
 
     def add_scalar(self, tag: str, scalar_value: float, global_step: int) -> None:
+        if not self._is_allowed(tag):
+            return
         if self._tb is not None:
             self._tb.add_scalar(tag, scalar_value, global_step)
         # Always also print lightweight logs
@@ -31,6 +44,11 @@ class Logger:
     def add_scalars(self, main_tag: str, tag_scalar_dict: dict[str, float], global_step: int) -> None:
         if not tag_scalar_dict:
             return
+        # Filter by allowed tags
+        if self._allowed is not None:
+            tag_scalar_dict = {k: v for k, v in tag_scalar_dict.items() if self._is_allowed(f"{main_tag}/{k}")}
+            if not tag_scalar_dict:
+                return
         if self._tb is not None:
             try:
                 self._tb.add_scalars(main_tag, tag_scalar_dict, global_step)

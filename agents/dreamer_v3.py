@@ -497,7 +497,8 @@ class DreamerV3Agent:
                 bc_loss = self.lambda_bc * bc_loss * (synthetic_mask.sum() / synthetic_mask.numel())
         
         # Enhanced loss with BC regularization
-        loss_ac = policy_loss + 0.5 * value_loss - self.entropy_coef * entropy + kl_penalty + bc_loss
+        # 強めの探索: entropy_coef はcfgからランタイム更新される
+        loss_ac = policy_loss + 0.5 * value_loss - self.entropy_coef * entropy + kl_penalty
         loss = loss_model + loss_ac
 
         self.opt.zero_grad(set_to_none=True)
@@ -511,12 +512,9 @@ class DreamerV3Agent:
             "loss/model_reward": float(reward_loss.detach().cpu()),
             "loss/policy": float(policy_loss.detach().cpu()),
             "loss/value": float(value_loss.detach().cpu()),
-            "loss/entropy": float(entropy.detach().cpu()),
+            # expose policy entropy under policy/entropy tag for dashboard spec
+            "policy/entropy": float(entropy.detach().cpu()),
             "loss/kl_divergence": float(kl_divergence.mean().detach().cpu()) if kl_divergence.numel() > 1 else float(kl_divergence.detach().cpu()),
-            "loss/kl_penalty": float(kl_penalty.detach().cpu()),
-            "loss/bc_regularization": float(bc_loss.detach().cpu()),
-            "llm/used_features": float(llm_features is not None),
-            "llm/used_logits": float(llm_logits is not None),
         }
         
         # Add synthetic data metrics if available
@@ -676,7 +674,7 @@ class UncertaintyGate:
         """Get current KL penalty coefficient."""
         return float(self.lambda_kl.detach())
     
-    def get_metrics(self) -> Dict[str, float]:
+    def get_metrics(self) -> dict[str, float]:
         """Get gating metrics for monitoring."""
         avg_kl = sum(self.kl_history[-100:]) / max(len(self.kl_history[-100:]), 1)
         avg_beta = sum(self.beta_history[-100:]) / max(len(self.beta_history[-100:]), 1) if self.beta_history else 0.0

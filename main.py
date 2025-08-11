@@ -44,7 +44,19 @@ def main() -> Optional[int]:
     set_seed(cfg.train.seed)
 
     device = torch.device(cfg.train.device if torch.cuda.is_available() else "cpu")
-    logger = Logger(log_dir=cfg.log_dir)
+    # Allow only requested metrics
+    allowed = {
+        "env/episode_return",
+        "env/success_rate",
+        "env/crafter_score",
+        "env/mean_episode_return",
+        "loss/model_recon",
+        "loss/model_reward",
+        "policy/entropy",
+        "loss/kl_divergence",
+        "loss/value",
+    }
+    logger = Logger(log_dir=cfg.log_dir, allowed_tags=allowed)
 
     try:
         env = make_crafter_env(cfg.env)

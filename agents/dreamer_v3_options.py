@@ -410,10 +410,9 @@ class HierarchicalDreamerV3Agent(DreamerV3Agent):
             "loss/policy": float(policy_loss.detach().cpu()),
             "loss/value": float(value_loss.detach().cpu()),
             "loss/termination": float(termination_loss.detach().cpu()),
-            "loss/entropy": float(entropy.detach().cpu()),
+            # expose under policy/entropy for unified dashboard
+            "policy/entropy": float(entropy.detach().cpu()),
             "loss/kl_divergence": float(kl_divergence.mean().detach().cpu()) if kl_divergence.numel() > 1 else float(kl_divergence.detach().cpu()),
-            "loss/kl_penalty": float(kl_penalty.detach().cpu()),
-            "loss/bc_regularization": float(bc_loss.detach().cpu()),
         }
         
         # Add option-specific metrics

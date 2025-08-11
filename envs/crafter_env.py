@@ -39,18 +39,26 @@ class _GymToGymnasiumV26:
     def unwrapped(self):
         return getattr(self._env, "unwrapped", self._env)
 
-    def reset(self, *, seed=None, options=None):
+    def reset(self, *, seed=None, options=None, **kwargs):
         if hasattr(self._env, "reset"):
             if seed is not None and hasattr(self._env, "seed"):
                 try:
                     self._env.seed(seed)
                 except Exception:
                     pass
-            obs = self._env.reset()
+            # Ignore extra kwargs such as env_ids passed by vector wrappers
+            try:
+                obs = self._env.reset()
+            except TypeError:
+                # Some gym envs may support (seed=, options=)
+                try:
+                    obs = self._env.reset(seed=seed)
+                except Exception:
+                    obs = self._env.reset()
             return obs, {}
         raise RuntimeError("Underlying env has no reset()")
 
-    def step(self, action):
+    def step(self, action, **kwargs):
         obs, reward, done, info = self._env.step(action)
         terminated = bool(done)
         truncated = bool(info.get("TimeLimit.truncated", False))
@@ -205,5 +213,16 @@ def make_crafter_env(env_cfg) -> "torchrl.envs.EnvBase":  # type: ignore[name-de
 
     # Build n_envs workers
     env = ParallelEnv(n_envs, _make_one)
+    # TorchRL may pass env_ids to reset(); wrap reset to swallow extra kwargs
+    try:
+        _orig_reset = env.reset
+        def _safe_reset(*args, **kwargs):  # type: ignore
+            kwargs.pop('env_ids', None)
+            kwargs.pop('reset_envs', None)
+            kwargs.pop('mask', None)
+            return _orig_reset(*args, **kwargs)
+        env.reset = _safe_reset  # type: ignore
+    except Exception:
+        pass
     return env
 

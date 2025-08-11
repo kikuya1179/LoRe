@@ -112,6 +112,22 @@ class Trainer:
         self._log_interval = int(getattr(self.cfg.train, "log_interval", 1000))
         self._save_every = int(getattr(self.cfg.train, "save_every_frames", 0))
 
+        # Episode-level tracking for returns and success rate
+        try:
+            import torch as _torch
+            self._ep_ret_env = _torch.zeros(self._n_envs, dtype=_torch.float32)
+            self._ep_len_env = _torch.zeros(self._n_envs, dtype=_torch.long)
+            self._ep_success_env = _torch.zeros(self._n_envs, dtype=_torch.bool)
+        except Exception:
+            self._ep_ret_env = None
+            self._ep_len_env = None
+            self._ep_success_env = None
+        self._success_hist: list[int] = []  # 1 for success, 0 otherwise
+        self._success_hist_cap = 100
+        # Crafter achievements tracking
+        self._ach_counts: dict[str, int] = {}
+        self._ach_episodes: int = 0
+
     def _get_obs_tensor(self, td) -> torch.Tensor:
         # Root 'observation' か、'next' 配下から抽出
         obs = td.get(self.obs_key)
@@ -462,9 +478,15 @@ class Trainer:
             td.set("action", action.cpu())
             td = self.env.step(td)
 
-            # 集計
+            # 集計（報酬・探索ボーナス適用前の平均も使う）
             try:
-                r = float(td.get("reward").mean().item()) if "reward" in td.keys(True, True) else 0.0
+                # TorchRL は step 後の値を ("next", key) に格納する実装が多い
+                if ("next", "reward") in td.keys(True, True):
+                    r = float(td.get(("next", "reward")).mean().item())
+                elif "reward" in td.keys(True, True):
+                    r = float(td.get("reward")).mean().item()
+                else:
+                    r = 0.0
             except Exception:
                 r = 0.0
             # Intrinsic reward
@@ -488,8 +510,22 @@ class Trainer:
                     _ = self._rnd.update(obs_i)
                 except Exception:
                     pass
-            self._ep_return += r
-            self._ep_len += 1
+            # Episode-wise accumulators (per-env)
+            try:
+                rew_vec = td.get(("next", "reward")) if ("next", "reward") in td.keys(True, True) else td.get("reward")
+                if rew_vec is not None and hasattr(self, "_ep_ret_env") and self._ep_ret_env is not None:
+                    import torch as _torch
+                    rv = rew_vec.view(-1).to(dtype=_torch.float32)
+                    self._ep_ret_env[: rv.numel()] += rv
+                    self._ep_len_env[: rv.numel()] += 1
+                    # success key if provided, else positive reward heuristic
+                    suc = td.get("success") if "success" in td.keys(True, True) else None
+                    if suc is not None:
+                        self._ep_success_env[: rv.numel()] |= suc.view(-1).to(dtype=_torch.bool)
+                    else:
+                        self._ep_success_env[: rv.numel()] |= (rv > 0)
+            except Exception:
+                pass
             # 行動ヒストグラム
             try:
                 if self._action_hist is not None:
@@ -501,7 +537,11 @@ class Trainer:
 
             # エピソード終端時は自動リセット（ベクトル環境対応: ここでは一括リセットの簡易実装）
             try:
-                dn = td.get("done") if "done" in td.keys(True, True) else None
+                dn = None
+                if ("next", "done") in td.keys(True, True):
+                    dn = td.get(("next", "done"))
+                elif "done" in td.keys(True, True):
+                    dn = td.get("done")
                 if dn is not None:
                     done_mask = dn.to(dtype=torch.bool).view(-1)
                 else:
@@ -512,6 +552,79 @@ class Trainer:
                 # Mark boundaries per-env
                 self._just_reset[done_mask] = True
                 self._no_reward_steps[done_mask] = 0
+                # Log episode returns, success rate, and Crafter metrics if info提供
+                try:
+                    import torch as _torch
+                    idxs = _torch.nonzero(done_mask, as_tuple=False).view(-1).cpu().tolist()
+                    for _i in idxs:
+                        if self._ep_ret_env is not None:
+                            ret_i = float(self._ep_ret_env[_i].item())
+                            self.logger.add_scalar("env/episode_return", ret_i, self.global_step)
+                        if self._ep_success_env is not None:
+                            s_i = 1 if bool(self._ep_success_env[_i].item()) else 0
+                            self._success_hist.append(s_i)
+                            if len(self._success_hist) > self._success_hist_cap:
+                                self._success_hist.pop(0)
+                            rate = sum(self._success_hist) / max(1, len(self._success_hist))
+                            self.logger.add_scalar("env/success_rate", float(rate), self.global_step)
+                        # Crafter achievements in info (if provided by env)
+                        try:
+                            # Try various locations/types for info
+                            info_any = None
+                            if ("next", "info") in td.keys(True, True):
+                                info_any = td.get(("next", "info"))
+                            elif "info" in td.keys(True, True):
+                                info_any = td.get("info")
+                            # Normalize to list[dict] per env if possible
+                            infos_list = []
+                            if isinstance(info_any, dict):
+                                infos_list = [info_any]
+                            else:
+                                try:
+                                    # TensorDict with per-env dicts
+                                    from tensordict import TensorDict as _TD  # type: ignore
+                                    if isinstance(info_any, _TD):
+                                        # best-effort conversion
+                                        infos_list = [ {k: v for k, v in info_any.items()} ]
+                                except Exception:
+                                    pass
+                                if not infos_list and isinstance(info_any, (list, tuple)):
+                                    infos_list = [x for x in info_any if isinstance(x, dict)]
+                            # Aggregate achievements if present
+                            if infos_list:
+                                ach_any: dict[str, bool] = {}
+                                for d in infos_list:
+                                    ach = d.get("achievements") or d.get("achievements/boolean") or d.get("achievements_bool")
+                                    if isinstance(ach, dict):
+                                        for k, v in ach.items():
+                                            ach_any[k] = bool(v) or ach_any.get(k, False)
+                                if ach_any:
+                                    for k, v in ach_any.items():
+                                        if v:
+                                            self._ach_counts[k] = self._ach_counts.get(k, 0) + 1
+                                    self._ach_episodes += 1
+                                    total_keys = len(self._ach_counts)
+                                    if total_keys > 0 and self._ach_episodes > 0:
+                                        mean_success = sum(self._ach_counts.values()) / float(self._ach_episodes * total_keys)
+                                        self.logger.add_scalar("env/success_rate", float(mean_success), self.global_step)
+                                        import math as _math
+                                        gm = 1.0
+                                        for c in self._ach_counts.values():
+                                            p = max(1e-6, c / float(self._ach_episodes))
+                                            gm *= p
+                                        crafter_score = gm ** (1.0 / total_keys)
+                                        self.logger.add_scalar("env/crafter_score", float(crafter_score), self.global_step)
+                        except Exception:
+                            pass
+                        # reset per-env accumulators
+                        if self._ep_ret_env is not None:
+                            self._ep_ret_env[_i] = 0.0
+                        if self._ep_len_env is not None:
+                            self._ep_len_env[_i] = 0
+                        if self._ep_success_env is not None:
+                            self._ep_success_env[_i] = False
+                except Exception:
+                    pass
                 # Try per-env reset
                 try:
                     idx = torch.nonzero(done_mask, as_tuple=False).view(-1).cpu().tolist()
@@ -539,7 +652,7 @@ class Trainer:
             self.global_step += 1
             # Update per-env trackers
             try:
-                rew_vec = td.get("reward")
+                rew_vec = td.get(("next", "reward")) if ("next", "reward") in td.keys(True, True) else td.get("reward")
                 if rew_vec is not None:
                     rew_vec = rew_vec.view(-1)
                     self._no_reward_steps = torch.where(rew_vec != 0.0, torch.zeros_like(self._no_reward_steps), self._no_reward_steps + 1)
@@ -661,43 +774,22 @@ class Trainer:
 
             self._collect(collect_per_iter)
             logs = self._update(updates_per_collect)
-            # logging
-            if logs:
+            # logging (whitelisted)
+            if logs and (self.global_step % self._log_interval == 0):
+                # Map loss/entropy -> policy/entropy already done inside agent
                 for k, v in logs.items():
-                    if self.global_step % self._log_interval == 0:
                         self.logger.add_scalar(k, float(v), self.global_step)
-            # LLM call stats
-            if self.global_step % self._log_interval == 0:
+                # 補助: 平均エピソードリターン（短窓）
                 try:
-                    self.logger.add_scalar("llm/calls_total", float(self._llm_calls_total), self.global_step)
-                    total_cache_events = max(1, self._llm_cache_hits + self._llm_cache_misses)
-                    hit_rate = float(self._llm_cache_hits) / float(total_cache_events)
-                    self.logger.add_scalar("llm/cache_hit_rate", hit_rate, self.global_step)
-                    if self._llm_intervals:
-                        avg_interval = sum(self._llm_intervals) / max(1, len(self._llm_intervals))
-                        self.logger.add_scalar("llm/avg_steps_between_calls", float(avg_interval), self.global_step)
-                    if self._llm_beta_when_call:
-                        avg_beta_call = sum(self._llm_beta_when_call) / max(1, len(self._llm_beta_when_call))
-                        self.logger.add_scalar("llm/avg_beta_when_call", float(avg_beta_call), self.global_step)
-                    self.logger.add_scalar("llm/errors_total", float(self._llm_errors_total), self.global_step)
-                    # Saver mode fraction (remaining budget ratio triggers)
-                    total = float(max(1, int(getattr(self.cfg.train, "llm_call_budget_total", 1))))
-                    left = float(max(0, self._llm_call_budget))
-                    saver_frac = 1.0 - (left / total)
-                    self.logger.add_scalar("llm/saver_mode_fraction", float(saver_frac), self.global_step)
-                    # PriorNet usage rate
-                    if self._priornet is not None and self._priornet_opportunities_total > 0:
-                        usage = float(self._priornet_used_total) / float(self._priornet_opportunities_total)
-                        self.logger.add_scalar("llm/priornet_usage_rate", usage, self.global_step)
+                    import torch as _torch
+                    if hasattr(self, "_ep_ret_env") and self._ep_ret_env is not None and hasattr(self, "_ep_len_env"):
+                        lens = self._ep_len_env.clamp_min(1).to(dtype=_torch.float32)
+                        mean_ret = float((self._ep_ret_env / lens).mean().item())
+                        self.logger.add_scalar("env/mean_episode_return", mean_ret, self.global_step)
                 except Exception:
                     pass
-            # simple reward log
-            try:
-                if self.global_step % self._log_interval == 0:
-                    rew = float(self._last_td.get("reward").mean().item())
-                    self.logger.add_scalar("env/reward", rew, self.global_step)
-            except Exception:
-                pass
+            # LLM系ログはダッシュボード対象外なので抑制
+            # env/reward の代わりにエピソードリターンを用いる（別途終端時に出力）
             # checkpoint（任意、エージェント側の save 実装に委ねる）
             try:
                 if self._save_every and (self.global_step % self._save_every == 0):
