@@ -60,6 +60,9 @@ class TrainConfig:
     llm_call_on_episode_boundary: bool = True
     llm_min_macro_interval: int = 1500
     llm_use_cache: bool = True
+    # Long-run scheduling (10M+)
+    llm_calls_per_million: int = 500
+    llm_progress_hardening: bool = True
     # PriorNet distillation
     llm_priornet_enabled: bool = True
     llm_priornet_update_every: int = 50

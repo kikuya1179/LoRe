@@ -627,7 +627,7 @@ class Trainer:
                         pass
             except Exception:
                 pass
-            # Budget-aware annealing (saver mode)
+            # Budget-aware annealing (saver mode) + long-run schedule to hit target calls/M
             try:
                 total_budget = max(1, int(getattr(self.cfg.train, "llm_call_budget_total", 1)))
                 left = max(0, int(self._llm_call_budget))
@@ -640,6 +640,22 @@ class Trainer:
                 elif r < 0.4:
                     self._llm_beta_thr = base_thr + 0.05
                     self._llm_cooldown = max(self._llm_cooldown, int(base_cd * 1.25))
+
+                # For very long runs (e.g., 10M), anneal target calls per million
+                target_cpm = max(1, int(getattr(self.cfg.train, "llm_calls_per_million", 500)))
+                # steps per planned call based on achieved calls so far
+                steps = max(1, int(self.global_step))
+                calls = max(1, int(self._llm_calls_total))
+                achieved_spc = steps / calls if calls > 0 else float("inf")
+                target_spc = 1_000_000 / float(target_cpm)
+                # If we are calling too often (< target_spc), harden thresholds slightly
+                if achieved_spc < target_spc * 0.9:
+                    self._llm_beta_thr = min(1.0, self._llm_beta_thr + 0.02)
+                    self._llm_cooldown = max(self._llm_cooldown, int(base_cd * 1.1))
+                # If we are too conservative (> 2x target), soften slightly early on
+                elif achieved_spc > target_spc * 2.0 and steps < int(0.3 * total_frames):
+                    self._llm_beta_thr = max(0.0, self._llm_beta_thr - 0.02)
+                    self._llm_cooldown = max(1, int(self._llm_cooldown * 0.9))
             except Exception:
                 pass
 
