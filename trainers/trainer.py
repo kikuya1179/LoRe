@@ -7,6 +7,11 @@ import time
 import torch
 
 from ..utils.replay import make_replay
+try:
+    # Optional GPU/Hybrid replay (falls back if unavailable)
+    from ..utils.gpu_replay import create_optimized_replay  # type: ignore
+except Exception:  # pragma: no cover
+    create_optimized_replay = None  # type: ignore
 from ..utils.llm_adapter import LLMAdapter, LLMAdapterConfig
 from ..utils.rnd import RND
 from ..utils.hw_trace import log_event, set_log_path as hw_set_log_path, set_current_step as hw_set_step
@@ -19,20 +24,53 @@ class Trainer:
         self.logger = logger
         self.cfg = cfg
         self.device = device
+        # process identity for prints
+        try:
+            import os as _os, platform as _pf
+            self._proc = f"pid={_os.getpid()}@{_pf.node()}"
+        except Exception:
+            self._proc = "pid=?"
+        self._t0 = time.time()
         
         # GPU monitoring setup
         if device.type == "cuda":
-            print(f"[GPU] Trainer initialized on {device}")
+            print(f"[proc:{self._proc}] [GPU] Trainer initialized on {device}")
             self._gpu_monitoring = True
         else:
             self._gpu_monitoring = False
 
-        # Replay buffer (TorchRL TensorDict-based)
-        # Use standard replay buffer
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.replay = make_replay(capacity=cfg.train.replay_capacity)
+        # Replay buffer (prefer GPU/Hybrid if enabled and CUDA available)
+        self._replay_is_gpu = False
+        try:
+            use_gpu_rb = (self.device.type == "cuda") and bool(getattr(self.cfg.train, "replay_use_gpu", False))
+        except Exception:
+            use_gpu_rb = False
+
+        if use_gpu_rb and create_optimized_replay is not None:
+            try:
+                self.replay = create_optimized_replay(capacity=cfg.train.replay_capacity, device=self.device)
+                self._replay_is_gpu = True
+                if self._gpu_monitoring:
+                    print(f"[proc:{self._proc}] [GPU] Using Hybrid/GPU replay buffer")
+            except Exception:
+                # Fallback to standard CPU replay
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    self.replay = make_replay(
+                        capacity=cfg.train.replay_capacity,
+                        use_priority=bool(getattr(cfg.train, "use_priority_replay", False)),
+                    )
+                self._replay_is_gpu = False
+        else:
+            # Use standard replay buffer
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.replay = make_replay(
+                    capacity=cfg.train.replay_capacity,
+                    use_priority=bool(getattr(cfg.train, "use_priority_replay", False)),
+                )
 
         # Specs
         try:
@@ -45,7 +83,14 @@ class Trainer:
         # TorchRL GymWrapper returns TensorDict with key "observation" by default
         self._last_td = td
 
-        self.global_step = 0
+        self.global_step = 0  # vector steps (env batch進行回数)
+        self.frames_seen = 0  # 合算フレーム数（全環境の合計）
+        # Concurrency primitives
+        try:
+            import threading as _threading
+            self._replay_lock = _threading.Lock()
+        except Exception:
+            self._replay_lock = None
         # HW trace file setup (default under log_dir)
         try:
             log_dir = getattr(self.cfg, 'log_dir', 'runs/dreamer_crafter')
@@ -130,6 +175,14 @@ class Trainer:
         self._random_warmup_steps = int(getattr(self.cfg.train, "init_random_frames", 0))
         self._log_interval = int(getattr(self.cfg.train, "log_interval", 1000))
         self._save_every = int(getattr(self.cfg.train, "save_every_frames", 0))
+        # Logging cadence trackers
+        try:
+            self._log_interval = int(getattr(self.cfg.train, "log_interval", 1000))
+        except Exception:
+            self._log_interval = 1000
+        self._next_log_step = self._log_interval
+        self._last_logs: dict[str, float] = {}
+        self._next_gpu_report = 500
 
         # Episode-level tracking for returns and success rate
         try:
@@ -211,7 +264,134 @@ class Trainer:
             _env_batch_size(rew, obs_like=False),
             _env_batch_size(done, obs_like=False),
         )
-        # Vectorized fast-path if batch > 1
+        # If GPU replay is enabled, store normalized float tensors on GPU to avoid HtoD later
+        if getattr(self, "_replay_is_gpu", False):
+            # Helper to ensure column tensors on the correct device/dtype
+            def _col_gpu(x: torch.Tensor | float | int, n_envs: int, dtype: torch.dtype) -> torch.Tensor:
+                t = x if isinstance(x, torch.Tensor) else torch.as_tensor(x)
+                t = t.to(device=self.device, dtype=dtype)
+                if t.numel() == 1:
+                    return t.view(1, 1).repeat(n_envs, 1)
+                if t.ndim == 1:
+                    return t.view(-1, 1)
+                return t
+
+            # Build observation tensors on GPU in float32 [0,1]
+            try:
+                o_prev_gpu = self._get_obs_tensor(prev_td)  # [N,C,H,W] or [1,C,H,W]
+            except Exception:
+                o_prev_gpu = torch.as_tensor(prev_obs, device=self.device, dtype=torch.float32)
+                if o_prev_gpu.ndim == 3:
+                    o_prev_gpu = o_prev_gpu.unsqueeze(0)
+            try:
+                o_next_gpu = self._get_obs_tensor(next_td)
+            except Exception:
+                o_next_gpu = torch.as_tensor(next_obs, device=self.device, dtype=torch.float32)
+                if o_next_gpu.ndim == 3:
+                    o_next_gpu = o_next_gpu.unsqueeze(0)
+
+            # Actions / rewards / done on GPU
+            a_gpu = action if isinstance(action, torch.Tensor) else torch.as_tensor(action)
+            a_gpu = a_gpu.to(device=self.device, dtype=torch.long)
+            if a_gpu.ndim == 1:
+                a_gpu = a_gpu.view(-1, 1)
+            # Determine provisional batch size from obs/act
+            n_gpu = max(
+                o_prev_gpu.shape[0] if o_prev_gpu.ndim > 3 else 1,
+                o_next_gpu.shape[0] if o_next_gpu.ndim > 3 else 1,
+                a_gpu.shape[0] if a_gpu.ndim >= 2 else 1,
+            )
+
+            # Rewards (gracefully handle None by zero-filling)
+            r_any = _get_with_fallback(next_td, ("next", "reward"), "reward")
+            if r_any is None:
+                r_gpu = torch.zeros(n_gpu, 1, device=self.device, dtype=torch.float32)
+            else:
+                r_gpu = (r_any if isinstance(r_any, torch.Tensor) else torch.as_tensor(r_any)).to(self.device, dtype=torch.float32)
+                if r_gpu.ndim == 0:
+                    r_gpu = r_gpu.view(1, 1)
+                elif r_gpu.ndim == 1:
+                    r_gpu = r_gpu.view(-1, 1)
+
+            # Dones (gracefully handle None by zero-filling)
+            d_any = _get_with_fallback(next_td, ("next", "done"), "done")
+            if d_any is None:
+                d_gpu = torch.zeros(n_gpu, 1, device=self.device, dtype=torch.float32)
+            else:
+                d_gpu = (d_any if isinstance(d_any, torch.Tensor) else torch.as_tensor(d_any)).to(self.device, dtype=torch.float32)
+                if d_gpu.ndim == 0:
+                    d_gpu = d_gpu.view(1, 1)
+                elif d_gpu.ndim == 1:
+                    d_gpu = d_gpu.view(-1, 1)
+
+            # Final batch size alignment including r/d
+            n_gpu = max(
+                n_gpu,
+                r_gpu.shape[0] if r_gpu.ndim >= 2 else 1,
+                d_gpu.shape[0] if d_gpu.ndim >= 2 else 1,
+            )
+
+            if o_prev_gpu.ndim == 4 and o_prev_gpu.shape[0] == 1 and n_gpu > 1:
+                o_prev_gpu = o_prev_gpu.repeat(n_gpu, 1, 1, 1)
+            if o_next_gpu.ndim == 4 and o_next_gpu.shape[0] == 1 and n_gpu > 1:
+                o_next_gpu = o_next_gpu.repeat(n_gpu, 1, 1, 1)
+            if a_gpu.shape[0] != n_gpu:
+                a_gpu = _col_gpu(a_gpu.squeeze(-1), n_gpu, torch.long)
+            if r_gpu.shape[0] != n_gpu:
+                r_gpu = _col_gpu(r_gpu.squeeze(-1), n_gpu, torch.float32)
+            if d_gpu.shape[0] != n_gpu:
+                d_gpu = _col_gpu(d_gpu.squeeze(-1), n_gpu, torch.float32)
+
+            # Build TensorDict on GPU
+            sample_gpu = TensorDict(
+                {
+                    "observation": o_prev_gpu,
+                    "action": a_gpu,
+                    "reward": r_gpu,
+                    "done": d_gpu,
+                    "next": {"observation": o_next_gpu},
+                },
+                batch_size=[n_gpu] if n_gpu > 1 else [],
+                device=self.device,
+            )
+
+            # LLM annotations on GPU (optional)
+            if llm_out is not None:
+                pl = llm_out.get("prior_logits") if isinstance(llm_out, dict) else None
+                cf = llm_out.get("confidence") if isinstance(llm_out, dict) else None
+                ft = llm_out.get("features") if isinstance(llm_out, dict) else None
+                if pl is not None:
+                    sample_gpu.set("llm_prior_logits", torch.as_tensor(pl, device=self.device, dtype=torch.float32))
+                if cf is not None:
+                    sample_gpu.set("llm_confidence", torch.as_tensor(cf, device=self.device, dtype=torch.float32))
+                if ft is not None and getattr(self.cfg.model, "llm_features_dim", 0) > 0:
+                    sample_gpu.set("llm_features", torch.as_tensor(ft, device=self.device, dtype=torch.float32))
+
+            try:
+                if getattr(self, "_replay_lock", None) is not None:
+                    with self._replay_lock:
+                        self.replay.extend(sample_gpu)  # type: ignore[attr-defined]
+                else:
+                    self.replay.extend(sample_gpu)  # type: ignore[attr-defined]
+            except Exception:
+                # Fallback to per-row add if extend is unavailable
+                if n_gpu > 1:
+                    if getattr(self, "_replay_lock", None) is not None:
+                        with self._replay_lock:
+                            for i in range(n_gpu):
+                                self.replay.add(sample_gpu[i])
+                    else:
+                        for i in range(n_gpu):
+                            self.replay.add(sample_gpu[i])
+                else:
+                    if getattr(self, "_replay_lock", None) is not None:
+                        with self._replay_lock:
+                            self.replay.add(sample_gpu)
+                    else:
+                        self.replay.add(sample_gpu)
+            return
+
+        # Vectorized fast-path if batch > 1 (CPU replay path)
         if n > 1 and isinstance(prev_obs, torch.Tensor) and prev_obs.ndim > 3:
             # Helper: ensure (n,1) column tensor with desired dtype
             def _as_column(x: torch.Tensor, n_envs: int, dtype: torch.dtype | None = None) -> torch.Tensor:
@@ -275,11 +455,20 @@ class Trainer:
 
             # Single extend call
             try:
-                self.replay.extend(sample_b)
+                if getattr(self, "_replay_lock", None) is not None:
+                    with self._replay_lock:
+                        self.replay.extend(sample_b)
+                else:
+                    self.replay.extend(sample_b)
             except Exception:
                 # Fallback to add loop if backend lacks extend
-                for i in range(n):
-                    self.replay.add(sample_b[i])
+                if getattr(self, "_replay_lock", None) is not None:
+                    with self._replay_lock:
+                        for i in range(n):
+                            self.replay.add(sample_b[i])
+                else:
+                    for i in range(n):
+                        self.replay.add(sample_b[i])
             return
 
         # Fallback: per-env add (single)
@@ -319,7 +508,11 @@ class Trainer:
             if ft is not None and getattr(self.cfg.model, "llm_features_dim", 0) > 0:
                 sample.set("llm_features", torch.as_tensor(ft).cpu())
 
-        self.replay.add(sample)
+        if getattr(self, "_replay_lock", None) is not None:
+            with self._replay_lock:
+                self.replay.add(sample)
+        else:
+            self.replay.add(sample)
 
     def _collect(self, steps: int):
         td = self._last_td
@@ -569,7 +762,7 @@ class Trainer:
 
             # 初期ランダム行動期間
             with torch.no_grad():
-                if self.global_step < self._random_warmup_steps:
+                if self.frames_seen < self._random_warmup_steps:
                     import torch as _torch
                     n = int(getattr(self.agent, "n_actions", 1))
                     batch_n = int(obs.shape[0]) if obs.dim() >= 4 else 1
@@ -620,7 +813,7 @@ class Trainer:
                     r += float(self.cfg.train.intrinsic_coef) * ri_n
                     # Train predictor with configurable frequency (default every 4 steps)
                     intrinsic_update_every = int(getattr(self.cfg.train, "intrinsic_update_every", 4))
-                    if self.global_step % intrinsic_update_every == 0:
+                    if self.frames_seen % intrinsic_update_every == 0:
                         _ = self._rnd.update(obs_i)
                 except Exception:
                     pass
@@ -673,61 +866,66 @@ class Trainer:
                     for _i in idxs:
                         if self._ep_ret_env is not None:
                             ret_i = float(self._ep_ret_env[_i].item())
-                            self.logger.add_scalar("env/episode_return", ret_i, self.global_step)
-                        if self._ep_success_env is not None:
-                            s_i = 1 if bool(self._ep_success_env[_i].item()) else 0
-                            self._success_hist.append(s_i)
-                            if len(self._success_hist) > self._success_hist_cap:
-                                self._success_hist.pop(0)
-                            rate = sum(self._success_hist) / max(1, len(self._success_hist))
-                            self.logger.add_scalar("env/success_rate", float(rate), self.global_step)
-                        # Crafter achievements in info (if provided by env)
+                            self.logger.add_scalar("env/episode_return", ret_i, self.frames_seen)
+                        # success_rate は Crafter 公式仕様に準拠して算出（達成タスク割合）
+                        # ここではエピソード終端時の info から達成タスクを抽出し、そのエピソードの成功率を記録する
                         try:
-                            # Try various locations/types for info
+                            def _extract_achievements_for_env(td_any, env_index: int):
+                                info_obj = None
+                                if ("next", "info") in td_any.keys(True, True):
+                                    info_obj = td_any.get(("next", "info"))
+                                elif "info" in td_any.keys(True, True):
+                                    info_obj = td_any.get("info")
+                                # envごとに取り出し
+                                if isinstance(info_obj, (list, tuple)):
+                                    if 0 <= env_index < len(info_obj) and isinstance(info_obj[env_index], dict):
+                                        return info_obj[env_index].get("achievements") or info_obj[env_index].get("achievements/boolean")
+                                # TensorDict 形式などのベストエフォート
+                                try:
+                                    from tensordict import TensorDict as _TD  # type: ignore
+                                    if isinstance(info_obj, _TD):
+                                        d = {k: v for k, v in info_obj.items() if isinstance(v, (int, float, bool))}
+                                        if d:
+                                            return d
+                                except Exception:
+                                    pass
+                                if isinstance(info_obj, dict):
+                                    return info_obj.get("achievements") or info_obj.get("achievements/boolean") or info_obj
+                                return None
+
+                            ach = _extract_achievements_for_env(td, _i)
+                            if isinstance(ach, dict) and len(ach) > 0:
+                                total_keys = 22 if 22 >= len(ach) else len(ach)
+                                achieved = sum(1 for v in ach.values() if bool(v))
+                                success_rate = achieved / float(total_keys)
+                                self.logger.add_scalar("env/success_rate", float(success_rate), self.frames_seen)
+                                self.logger.add_scalar("env/score_percent", float(success_rate * 100.0), self.frames_seen)
+                        except Exception:
+                            pass
+                        # Crafter achievements aggregate（幾何平均スコア）は補助として記録（success_rateは上書きしない）
+                        try:
                             info_any = None
                             if ("next", "info") in td.keys(True, True):
                                 info_any = td.get(("next", "info"))
                             elif "info" in td.keys(True, True):
                                 info_any = td.get("info")
-                            # Normalize to list[dict] per env if possible
-                            infos_list = []
+                            ach_dict: dict[str, bool] | None = None
                             if isinstance(info_any, dict):
-                                infos_list = [info_any]
-                            else:
-                                try:
-                                    # TensorDict with per-env dicts
-                                    from tensordict import TensorDict as _TD  # type: ignore
-                                    if isinstance(info_any, _TD):
-                                        # best-effort conversion
-                                        infos_list = [ {k: v for k, v in info_any.items()} ]
-                                except Exception:
-                                    pass
-                                if not infos_list and isinstance(info_any, (list, tuple)):
-                                    infos_list = [x for x in info_any if isinstance(x, dict)]
-                            # Aggregate achievements if present
-                            if infos_list:
-                                ach_any: dict[str, bool] = {}
-                                for d in infos_list:
-                                    ach = d.get("achievements") or d.get("achievements/boolean") or d.get("achievements_bool")
-                                    if isinstance(ach, dict):
-                                        for k, v in ach.items():
-                                            ach_any[k] = bool(v) or ach_any.get(k, False)
-                                if ach_any:
-                                    for k, v in ach_any.items():
-                                        if v:
-                                            self._ach_counts[k] = self._ach_counts.get(k, 0) + 1
-                                    self._ach_episodes += 1
-                                    total_keys = len(self._ach_counts)
-                                    if total_keys > 0 and self._ach_episodes > 0:
-                                        mean_success = sum(self._ach_counts.values()) / float(self._ach_episodes * total_keys)
-                                        self.logger.add_scalar("env/success_rate", float(mean_success), self.global_step)
-                                        import math as _math
-                                        gm = 1.0
-                                        for c in self._ach_counts.values():
-                                            p = max(1e-6, c / float(self._ach_episodes))
-                                            gm *= p
-                                        crafter_score = gm ** (1.0 / total_keys)
-                                        self.logger.add_scalar("env/crafter_score", float(crafter_score), self.global_step)
+                                ach_dict = info_any.get("achievements") or info_any.get("achievements/boolean") or None
+                            if ach_dict:
+                                for k, v in ach_dict.items():
+                                    if v:
+                                        self._ach_counts[k] = self._ach_counts.get(k, 0) + 1
+                                self._ach_episodes += 1
+                                total_keys = len(self._ach_counts)
+                                if total_keys > 0 and self._ach_episodes > 0:
+                                    import math as _math
+                                    gm = 1.0
+                                    for c in self._ach_counts.values():
+                                        p = max(1e-6, c / float(self._ach_episodes))
+                                        gm *= p
+                                    crafter_score = gm ** (1.0 / total_keys)
+                                    self.logger.add_scalar("env/crafter_score", float(crafter_score), self.frames_seen)
                         except Exception:
                             pass
                         # reset per-env accumulators
@@ -766,7 +964,17 @@ class Trainer:
             self._last_td = td
 
             self.global_step += 1
-            hw_set_step(self.global_step)
+            # 合算フレーム数を加算（ベクトル環境のサンプル数）
+            try:
+                rew_vec = td.get(("next", "reward")) if ("next", "reward") in td.keys(True, True) else td.get("reward")
+                if rew_vec is not None:
+                    env_batch = int(rew_vec.view(-1).numel())
+                else:
+                    env_batch = int(self._n_envs)
+            except Exception:
+                env_batch = int(self._n_envs)
+            self.frames_seen += env_batch
+            hw_set_step(self.frames_seen)
             # Update per-env trackers
             try:
                 rew_vec = td.get(("next", "reward")) if ("next", "reward") in td.keys(True, True) else td.get("reward")
@@ -776,6 +984,13 @@ class Trainer:
             except Exception:
                 pass
             self._llm_steps_since_call_env += 1
+
+            # 予算到達で早期停止（合算フレーム基準）
+            try:
+                if self.frames_seen >= int(getattr(self.cfg.train, "total_frames", 10**9)):
+                    break
+            except Exception:
+                pass
 
             # Distill PriorNet occasionally using the most recent h/logits pairs
             try:
@@ -811,13 +1026,99 @@ class Trainer:
 
     def _update(self, updates: int):
         logs = {}
+        # Async path: prefetch CPU->GPU while agent is updating
+        use_async = bool(getattr(self.cfg.train, "async_update", True))
+        if use_async:
+            try:
+                from collections import deque
+                import threading
+                q: deque = deque(maxlen=2)
+                stop_flag = {"v": False}
+                logs_local = {}
+
+                def loader_job():
+                    while not stop_flag["v"]:
+                        try:
+                            t_samp = time.perf_counter()
+                            if getattr(self, "_replay_lock", None) is not None:
+                                with self._replay_lock:
+                                    batch = self.replay.sample(self.cfg.train.batch_size)
+                            else:
+                                batch = self.replay.sample(self.cfg.train.batch_size)
+                            log_event('update.sample', 'cpu', (time.perf_counter() - t_samp) * 1000.0)
+                        except Exception:
+                            break
+                        # pin + async HtoD
+                        try:
+                            if hasattr(batch, "pin_memory"):
+                                batch = batch.pin_memory()
+                            t_to = time.perf_counter()
+                            batch = batch.to(self.device, non_blocking=True)
+                            log_event('update.host_to_device', 'dma', (time.perf_counter() - t_to) * 1000.0)
+                        except Exception:
+                            pass
+                        q.append(batch)
+                        if len(q) >= q.maxlen:
+                            # backpressure: small sleep
+                            time.sleep(0.001)
+
+                loader = threading.Thread(target=loader_job, daemon=True)
+                loader.start()
+
+                iters = 0
+                while iters < updates:
+                    if not q:
+                        time.sleep(0.001)
+                        continue
+                    batch = q.popleft()
+                    # Decode uint8 observations to float on GPU
+                    try:
+                        if "observation" in batch.keys(True, True):
+                            obs_t = batch.get("observation")
+                            if obs_t.dtype == torch.uint8:
+                                batch.set("observation", obs_t.to(torch.float32).div_(255.0))
+                        if ("next", "observation") in batch.keys(True, True):
+                            nxt = batch.get(("next", "observation"))
+                            if nxt.dtype == torch.uint8:
+                                batch.set(("next", "observation"), nxt.to(torch.float32).div_(255.0))
+                    except Exception:
+                        pass
+                    # PER weights pass-through
+                    try:
+                        iw = None
+                        if '_weights' in batch.keys(True, True):
+                            iw = batch.get('_weights').to(self.device)
+                            if iw.dim() == 1:
+                                iw = iw.view(-1, 1)
+                            batch.set('_sample_weights', iw)
+                    except Exception:
+                        pass
+                    t_upd = time.perf_counter()
+                    out = self.agent.update(batch)
+                    log_event('update.agent', 'gpu', (time.perf_counter() - t_upd) * 1000.0)
+                    logs_local.update(out)
+                    iters += 1
+
+                stop_flag["v"] = True
+                loader.join(timeout=0.1)
+                return logs_local
+            except Exception:
+                pass
+
+        # Fallback: synchronous
         for _ in range(updates):
             try:
                 t_samp = time.perf_counter()
-                batch = self.replay.sample(self.cfg.train.batch_size)
+                if getattr(self, "_replay_lock", None) is not None:
+                    with self._replay_lock:
+                        batch = self.replay.sample(self.cfg.train.batch_size)
+                else:
+                    batch = self.replay.sample(self.cfg.train.batch_size)
                 log_event('update.sample', 'cpu', (time.perf_counter() - t_samp) * 1000.0)
             except Exception:
-                break  # not enough samples yet
+                # 収集が追いつかない場合は短い待機を挟み、即座に次の収集へ戻す
+                time.sleep(0.001)
+                break
             # move to device with non-blocking transfer (pin CPU memory first if possible)
             try:
                 if hasattr(batch, "pin_memory"):
@@ -851,25 +1152,80 @@ class Trainer:
                         batch.set(("next", "observation"), nxt.to(torch.float32).div_(255.0))
             except Exception:
                 pass
+            # PER: importance weights support
+            try:
+                iw = None
+                if '_weights' in batch.keys(True, True):
+                    iw = batch.get('_weights').to(self.device)
+                    # 形状合わせ（[B]→[B,1]）
+                    if iw.dim() == 1:
+                        iw = iw.view(-1, 1)
+                    # 重要度はメトリクスとしても記録
+                    try:
+                        self.logger.add_scalar('replay/importance_mean', float(iw.mean().detach().cpu()), self.frames_seen)
+                    except Exception:
+                        pass
+                # 一時的にエージェントへ重みを渡す（バッチに格納）
+                if iw is not None:
+                    batch.set('_sample_weights', iw)
+            except Exception:
+                pass
+
             t_upd = time.perf_counter()
             out = self.agent.update(batch)
             log_event('update.agent', 'gpu', (time.perf_counter() - t_upd) * 1000.0)
             logs.update(out)
+            # PER: 可能ならTD誤差で優先度更新
+            try:
+                if hasattr(self.replay, 'update_priorities') and 'value/td_abs_mean' in out:
+                    # 代表値でなく、バッチ個別誤差が望ましいが簡易版として平均誤差を使用
+                    err = out['value/td_abs_mean']
+                    bs = int(self.cfg.train.batch_size)
+                    errs = torch.full((bs,), float(err), dtype=torch.float32)
+                    idx = batch.get('_indices') if '_indices' in batch.keys(True, True) else None
+                    if idx is not None:
+                        self.replay.update_priorities(idx, errs)
+            except Exception:
+                pass
         return logs
 
     def train(self):
         total_frames = int(self.cfg.train.total_frames)
-        collect_per_iter = int(self.cfg.train.collect_steps_per_iter)
-        updates_per_collect = int(self.cfg.train.updates_per_collect)
+        # Use smaller chunks to interleave collect<->update more tightly
+        default_collect = int(self.cfg.train.collect_steps_per_iter)
+        default_update = int(self.cfg.train.updates_per_collect)
+        collect_per_iter = int(getattr(self.cfg.train, 'collect_chunk_steps', default_collect))
+        updates_per_collect = int(getattr(self.cfg.train, 'update_chunk_steps', default_update))
 
-        while self.global_step < total_frames:
+        # 合算フレーム数で学習終了を判定
+        # Optional async collector thread keeps CPU env stepping while GPU updates
+        use_async_collect = bool(getattr(self.cfg.train, 'async_collect', True))
+        collector_thread = None
+        stop_collect = {'v': False}
+
+        def _collector_loop():
+            try:
+                while not stop_collect['v'] and self.frames_seen < total_frames:
+                    self._collect(collect_per_iter)
+            except Exception:
+                pass
+
+        if use_async_collect:
+            try:
+                import threading as _threading
+                collector_thread = _threading.Thread(target=_collector_loop, daemon=True)
+                collector_thread.start()
+            except Exception:
+                collector_thread = None
+
+        while self.frames_seen < total_frames:
             # Anneal exploration parameters
             try:
                 # Entropy coefficient: linear anneal from start -> entropy_anneal_to
                 ent_start = float(getattr(self.cfg.train, "entropy_coef", 0.05))
                 ent_to = float(getattr(self.cfg.train, "entropy_anneal_to", ent_start))
                 ent_frames = max(1, int(getattr(self.cfg.train, "entropy_anneal_frames", total_frames)))
-                frac = min(1.0, self.global_step / ent_frames)
+                frac = min(1.0, self.frames_seen / ent_frames)
                 current_entropy_coef = ent_start + (ent_to - ent_start) * frac
                 if hasattr(self.agent, "entropy_coef"):
                     self.agent.entropy_coef = float(current_entropy_coef)
@@ -877,15 +1233,15 @@ class Trainer:
                 eps_start = float(getattr(self.cfg.train, "epsilon_greedy", 0.2))
                 eps_to = float(getattr(self.cfg.train, "epsilon_greedy_decay_to", eps_start))
                 eps_frames = max(1, int(getattr(self.cfg.train, "epsilon_greedy_decay_frames", total_frames)))
-                frac_e = min(1.0, self.global_step / eps_frames)
+                frac_e = min(1.0, self.frames_seen / eps_frames)
                 current_eps = eps_start + (eps_to - eps_start) * frac_e
                 if hasattr(self.agent, "epsilon_greedy"):
                     self.agent.epsilon_greedy = float(current_eps)
                 # Log occasionally
                 if self.global_step % self._log_interval == 0:
                     try:
-                        self.logger.add_scalar("exploration/entropy_coef", float(current_entropy_coef), self.global_step)
-                        self.logger.add_scalar("exploration/epsilon_greedy", float(current_eps), self.global_step)
+                        self.logger.add_scalar("exploration/entropy_coef", float(current_entropy_coef), self.frames_seen)
+                        self.logger.add_scalar("exploration/epsilon_greedy", float(current_eps), self.frames_seen)
                     except Exception:
                         pass
             except Exception:
@@ -907,7 +1263,7 @@ class Trainer:
                 # For very long runs (e.g., 10M), anneal target calls per million
                 target_cpm = max(1, int(getattr(self.cfg.train, "llm_calls_per_million", 500)))
                 # steps per planned call based on achieved calls so far
-                steps = max(1, int(self.global_step))
+                steps = max(1, int(self.frames_seen))
                 calls = max(1, int(self._llm_calls_total))
                 achieved_spc = steps / calls if calls > 0 else float("inf")
                 target_spc = 1_000_000 / float(target_cpm)
@@ -922,67 +1278,93 @@ class Trainer:
             except Exception:
                 pass
 
-            self._collect(collect_per_iter)
+            if not use_async_collect:
+                self._collect(collect_per_iter)
             logs = self._update(updates_per_collect)
-            # logging (whitelisted)
-            if logs and (self.global_step % self._log_interval == 0):
-                # Map loss/entropy -> policy/entropy already done inside agent
-                for k, v in logs.items():
-                        self.logger.add_scalar(k, float(v), self.global_step)
+            if logs:
+                self._last_logs = logs
+            # logging (whitelisted) with catch-up to avoid missing due to big frame jumps
+            if self.frames_seen >= self._next_log_step:
+                to_log = self._last_logs if self._last_logs else logs
+                if to_log:
+                    for k, v in to_log.items():
+                        self.logger.add_scalar(k, float(v), self.frames_seen)
                 # 補助: 平均エピソードリターン（短窓）
                 try:
                     import torch as _torch
                     if hasattr(self, "_ep_ret_env") and self._ep_ret_env is not None and hasattr(self, "_ep_len_env"):
                         lens = self._ep_len_env.clamp_min(1).to(dtype=_torch.float32)
                         mean_ret = float((self._ep_ret_env / lens).mean().item())
-                        self.logger.add_scalar("env/mean_episode_return", mean_ret, self.global_step)
+                        self.logger.add_scalar("env/mean_episode_return", mean_ret, self.frames_seen)
                 except Exception:
                     pass
+                # advance next log step; catch up if we jumped multiple intervals
+                while self._next_log_step <= self.frames_seen:
+                    self._next_log_step += self._log_interval
             # LLM系ログはダッシュボード対象外なので抑制
             # env/reward の代わりにエピソードリターンを用いる（別途終端時に出力）
             # checkpoint（任意、エージェント側の save 実装に委ねる）
             try:
-                if self._save_every and (self.global_step % self._save_every == 0):
+                if self._save_every and (self.frames_seen % self._save_every == 0):
                     if hasattr(self.agent, "save"):
                         import os
                         os.makedirs(self.cfg.ckpt_dir, exist_ok=True)
-                        path = f"{self.cfg.ckpt_dir}/ckpt_step_{self.global_step}.pt"
+                        path = f"{self.cfg.ckpt_dir}/ckpt_step_{self.frames_seen}.pt"
                         self.agent.save(path)
             except Exception:
                 pass
-            # GPU monitoring and logging (detailed)
-            if self._gpu_monitoring and self.global_step % 500 == 0 and torch.cuda.is_available():
-                try:
-                    dev = torch.cuda.current_device()
-                    name = torch.cuda.get_device_name(dev)
-                    props = torch.cuda.get_device_properties(dev)
-                    allocated = torch.cuda.memory_allocated(dev) / 1024**2
-                    reserved = torch.cuda.memory_reserved(dev) / 1024**2
-                    max_alloc = torch.cuda.max_memory_allocated(dev) / 1024**2
-                    # Utilization via nvidia-smi
-                    import subprocess
-                    util = 'N/A'
-                    mem_util = 'N/A'
+            # GPU monitoring and logging (detailed) with catch-up
+            if self._gpu_monitoring and torch.cuda.is_available():
+                if self.frames_seen >= self._next_gpu_report:
                     try:
-                        q = ['nvidia-smi','--query-gpu=utilization.gpu,utilization.memory','--format=csv,noheader,nounits']
-                        r = subprocess.run(q, capture_output=True, text=True, timeout=1)
-                        if r.returncode == 0 and r.stdout:
-                            parts = r.stdout.strip().split(',')
-                            if len(parts) >= 2:
-                                util = parts[0].strip()+'%'
-                                mem_util = parts[1].strip()+'%'
+                        dev = torch.cuda.current_device()
+                        name = torch.cuda.get_device_name(dev)
+                        props = torch.cuda.get_device_properties(dev)
+                        allocated = torch.cuda.memory_allocated(dev) / 1024**2
+                        reserved = torch.cuda.memory_reserved(dev) / 1024**2
+                        max_alloc = torch.cuda.max_memory_allocated(dev) / 1024**2
+                        # Utilization via nvidia-smi
+                        import subprocess
+                        util = 'N/A'
+                        mem_util = 'N/A'
+                        try:
+                            q = ['nvidia-smi','--query-gpu=utilization.gpu,utilization.memory','--format=csv,noheader,nounits']
+                            r = subprocess.run(q, capture_output=True, text=True, timeout=1)
+                            if r.returncode == 0 and r.stdout:
+                                parts = r.stdout.strip().split(',')
+                                if len(parts) >= 2:
+                                    util = parts[0].strip()+'%'
+                                    mem_util = parts[1].strip()+'%'
+                        except Exception:
+                            pass
+                        # Log scalars
+                        self.logger.add_scalar("gpu/alloc_mb", allocated, self.frames_seen)
+                        self.logger.add_scalar("gpu/reserved_mb", reserved, self.frames_seen)
+                        self.logger.add_scalar("gpu/max_alloc_mb", max_alloc, self.frames_seen)
+                        # Print brief status
+                        print(f"[GPU] step={self.frames_seen} dev={dev} {name} SMs={props.multi_processor_count} mem={allocated:.0f}/{reserved:.0f}MB util={util} mem_util={mem_util}")
                     except Exception:
                         pass
-                    # Log scalars
-                    self.logger.add_scalar("gpu/alloc_mb", allocated, self.global_step)
-                    self.logger.add_scalar("gpu/reserved_mb", reserved, self.global_step)
-                    self.logger.add_scalar("gpu/max_alloc_mb", max_alloc, self.global_step)
-                    # Print brief status
-                    print(f"[GPU] step={self.global_step} dev={dev} {name} SMs={props.multi_processor_count} mem={allocated:.0f}/{reserved:.0f}MB util={util} mem_util={mem_util}")
-                except Exception:
-                    pass
+                    # advance next gpu report; catch up if we jumped multiple intervals
+                    while self._next_gpu_report <= self.frames_seen:
+                        self._next_gpu_report += 500
             
             # Update logger step and flush with rate limiting
-            self.logger.set_current_step(self.global_step)
+            self.logger.set_current_step(self.frames_seen)
             self.logger.flush()
+
+            # Heartbeat every 1000 steps exactly
+            try:
+                if hasattr(self.logger, 'maybe_step'):
+                    self.logger.maybe_step(self.frames_seen)
+            except Exception:
+                pass
+
+        # stop collector
+        if collector_thread is not None:
+            stop_collect['v'] = True
+            try:
+                collector_thread.join(timeout=0.2)
+            except Exception:
+                pass
 

@@ -10,8 +10,8 @@ class EnvConfig:
     image_size: int = 48
     frame_stack: int = 3
     norm_obs: bool = False
-    action_repeat: int = 1
-    num_envs: int = 4
+    action_repeat: int = 4
+    num_envs: int = 16
 
 
 @dataclass
@@ -19,31 +19,56 @@ class TrainConfig:
     device: str = "cuda"
     seed: int = 42
     total_frames: int = 1_000_000  # Fixed typo
-    init_random_frames: int = 10_000
+    init_random_frames: int = 30_000
     batch_size: int = 256
-    updates_per_collect: int = 150
-    collect_steps_per_iter: int = 1000
-    replay_capacity: int = 10_000
-    learning_rate: float = 3e-4
+    updates_per_collect: int = 2000
+    collect_steps_per_iter: int = 2000
+    replay_capacity: int = 100_000
+    learning_rate: float = 2e-4
     gamma: float = 0.99
     lambda_kl: float = 0.01  # for LLM prior regularization
     # Exploration settings
-    # Exploration (強化): 初動を作るため増強
-    entropy_coef: float = 0.08
-    epsilon_greedy: float = 0.2
+    # 探索→活用へ寄せる（疎報酬対策はRNDで補完）
+    entropy_coef: float = 0.02
+    epsilon_greedy: float = 0.0
     # Annealing schedules (optional)
-    entropy_anneal_to: float = 0.02
+    entropy_anneal_to: float = 0.005
     entropy_anneal_frames: int = 600_000
-    epsilon_greedy_decay_to: float = 0.05
+    epsilon_greedy_decay_to: float = 0.0
     epsilon_greedy_decay_frames: int = 800_000
+    # AsyncTrainer softmax exploration (early phase)
+    exploration_softmax_frames: int = 400_000
+    softmax_temp_start: float = 1.8
+    softmax_temp_end: float = 1.2
+    late_softmax_temp: float = 1.05
+    late_softmax_prob: float = 0.25
     # Intrinsic reward (RND)
-    use_intrinsic: bool = False
-    intrinsic_coef: float = 0.2
+    use_intrinsic: bool = True
+    intrinsic_coef: float = 0.5
     intrinsic_norm: bool = True
+    intrinsic_clip_max: float = 1.0
     save_every_frames: int = 100_000
-    log_interval: int = 4000
+    log_interval: int = 1000
     max_episode_steps: Optional[int] = 2000
-    intrinsic_update_every: int = 8
+    intrinsic_update_every: int = 4
+
+    # Threading / runtime limits (can replace shell env exports)
+    torch_num_threads: int = 1
+    torch_num_interop_threads: int = 1
+    omp_num_threads: int = 1
+    mkl_num_threads: int = 1
+    numexpr_max_threads: int = 1
+
+    # Async training (collect on CPU while learning on GPU)
+    async_update: bool = True
+    async_collect: bool = True
+    update_threads: int = 1
+    collect_chunk_steps: int = 128
+    update_chunk_steps: int = 128
+    
+    # Replay acceleration
+    replay_use_gpu: bool = True  # Use Hybrid/GPU replay to minimize HtoD transfers
+    # (optional) future: replay_gpu_capacity_ratio, replay_force_gpu
     
     # Enhanced LLM Configuration
     use_llm: bool = False
@@ -93,9 +118,9 @@ class TrainConfig:
     her_ratio: float = 0.0
     
     # Priority Replay
-    use_priority_replay: bool = False
-    priority_alpha: float = 0.0
-    priority_beta: float = 0.0
+    use_priority_replay: bool = True
+    priority_alpha: float = 0.6
+    priority_beta: float = 0.4
     
     # Distillation
     use_distillation: bool = False
@@ -116,7 +141,8 @@ class TrainConfig:
 @dataclass
 class ModelConfig:
     algo: str = "dreamer_v3"  # "dreamer" or "dreamer_v3"
-    obs_channels: int = 1
+    # 実行時に main で環境から自動推定するが、既定も frame_stack に合わせておく
+    obs_channels: int = 3
     latent_dim: int = 256
     rssm_hidden: int = 200
     actor_hidden: int = 400

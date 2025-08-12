@@ -19,24 +19,23 @@ class ConvEncoder(nn.Module):
     def __init__(self, in_channels: int = 1, latent_dim: int = 256) -> None:
         super().__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, 32, 4, stride=2),
+            nn.Conv2d(in_channels, 32, 4, stride=2, padding=1),
             nn.ELU(),
-            nn.Conv2d(32, 64, 4, stride=2),
+            nn.Conv2d(32, 64, 4, stride=2, padding=1),
             nn.ELU(),
-            nn.Conv2d(64, 128, 4, stride=2),
+            nn.Conv2d(64, 128, 4, stride=2, padding=1),
             nn.ELU(),
-            nn.Conv2d(128, 256, 4, stride=2),
+            nn.Conv2d(128, 256, 4, stride=2, padding=1),
             nn.ELU(),
             nn.Flatten(),
         )
-        # Infer flattened size lazily
-        self.fc = None  # type: ignore
+        # Use LazyLinear to register parameters before optimizer creation
+        # (materialized on first forward with correct in_features)
+        self.fc = nn.LazyLinear(latent_dim)
         self.latent_dim = latent_dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         z = self.conv(x)
-        if self.fc is None:
-            self.fc = nn.Linear(z.size(-1), self.latent_dim).to(z.device)
         return self.fc(z)
 
 
@@ -412,8 +411,8 @@ class DreamerV3Agent:
     @torch.no_grad()
     def act(self, obs: torch.Tensor, precomputed_h: Optional[torch.Tensor] = None) -> torch.Tensor:
         # obs: [B,C,H,W]
-        self.world.eval()
-        self.ac.eval()
+        # Do not toggle train/eval to avoid races with learner thread
+        # Inference-only path
         if precomputed_h is not None:
             # Use precomputed hidden state to avoid double encoding/RSSM
             h = precomputed_h
@@ -466,8 +465,13 @@ class DreamerV3Agent:
             actions = actions.to(torch.long)
         while actions.ndim > 1 and actions.shape[-1] == 1:
             actions = actions.squeeze(-1)
-        rewards = batch.get("reward").to(self.device, non_blocking=True).squeeze(-1)
-        dones = batch.get("done").to(self.device, non_blocking=True).squeeze(-1) if "done" in batch.keys(True, True) else None
+        # Robust reshape: allow [B], [B,1], or [B,1,1] -> [B]
+        rewards = batch.get("reward").to(self.device, non_blocking=True).float()
+        rewards = rewards.view(-1)
+        dones = None
+        if "done" in batch.keys(True, True):
+            d = batch.get("done").to(self.device, non_blocking=True).float()
+            dones = d.view(-1)
 
         try:
             autocast_ctx = torch.amp.autocast('cuda', enabled=self._amp_enabled)
@@ -517,15 +521,35 @@ class DreamerV3Agent:
             if mask_bits.dim() == 1:  # Bitmask format
                 llm_mask = self._bitmask_to_tensor(mask_bits, self.n_actions)
         
-        # Compute values (with ensemble if available)
+        # Compute values V(s_t)
         if self.critic_ensemble is not None:
             values, ensemble_values = self.ac.value(h, return_ensemble=True)
             value_variance = torch.var(ensemble_values, dim=0)  # [batch_size]
         else:
             values = self.ac.value(h)
             value_variance = None
-        
         values = values.unsqueeze(-1)  # [B,1]
+
+        # Bootstrap target with V(s_{t+1}) from next observation if available
+        values_next = values  # fallback
+        try:
+            if ("next", "observation") in batch.keys(True, True):
+                next_obs = batch.get(("next", "observation")).to(self.device, non_blocking=True)
+                if next_obs.dtype == torch.uint8:
+                    next_obs = next_obs.float().div_(255.0)
+                if next_obs.dim() == 3:
+                    next_obs = next_obs.unsqueeze(0)
+                # Encode next obs and get next latent/state
+                with torch.no_grad():
+                    z_next = self.world.encoder(next_obs)
+                    h_next_seq, _ = self.world.rssm(
+                        z_next.unsqueeze(1), torch.zeros(1, z_next.size(0), z_next.size(-1), device=z_next.device)
+                    )
+                    h_next = h_next_seq[:, 0]
+                    v_next = self.ac.value(h_next).unsqueeze(-1)  # [B,1]
+                    values_next = v_next
+        except Exception:
+            pass
         
         # Policy logits with uncertainty-based LLM integration
         logits_result = self.ac.policy_logits(
@@ -549,9 +573,20 @@ class DreamerV3Agent:
 
         # 単ステップの TD(0)
         with torch.no_grad():
-            target_v = self._td0_target(rewards, values.detach(), dones).squeeze(-1)
-        advantage = (target_v - values.squeeze(-1)).detach()
+            target_v = self._td0_target(rewards, values_next.detach(), dones).squeeze(-1)
+        td_error = (target_v - values.squeeze(-1))
+        # Advantage normalization (reduce variance) with clipping for stability
+        advantage = td_error.detach()
+        try:
+            adv_mean = advantage.mean()
+            adv_std = advantage.std(unbiased=False).clamp_min(1e-6)
+            advantage = (advantage - adv_mean) / adv_std
+            advantage = advantage.clamp(-5.0, 5.0)
+        except Exception:
+            pass
 
+        # Robust targets shape
+        target_v = target_v.view_as(values.squeeze(-1))
         policy_loss = -(logp_act * advantage).mean()
         value_loss = F.mse_loss(values.squeeze(-1), target_v)
 
@@ -598,7 +633,23 @@ class DreamerV3Agent:
                 bc_loss = self.lambda_bc * bc_loss * (synthetic_mask.sum() / synthetic_mask.numel())
         
         # Enhanced loss with BC regularization
-        # 強めの探索: entropy_coef はcfgからランタイム更新される
+        # 強めの探索: entropy_coef はランタイムでトレーナーから更新される
+        # Importance sampling weights from PER (if provided)
+        per_weights = None
+        try:
+            if "_sample_weights" in batch.keys(True, True):
+                per_weights = batch.get("_sample_weights").to(obs.device)
+                if per_weights.dim() == 2 and per_weights.size(1) == 1:
+                    per_weights = per_weights.squeeze(1)
+        except Exception:
+            per_weights = None
+
+        if per_weights is not None:
+            # 重み付きの損失（値・方策）。モデル再構成/報酬は均等重みのまま。
+            policy_loss = -(logp_act * advantage * per_weights).mean()
+            value_loss = F.mse_loss(values.squeeze(-1), target_v, reduction='none')
+            value_loss = (value_loss * per_weights).mean()
+        
         loss_ac = policy_loss + 0.5 * value_loss - self.entropy_coef * entropy + kl_penalty
         loss = loss_model + loss_ac
 
@@ -611,15 +662,16 @@ class DreamerV3Agent:
 
         self.opt.zero_grad(set_to_none=True)
         t_bwd = time.perf_counter()
+        grad_global_norm = torch.tensor(0.0, device=obs.device)
         if self._amp_enabled and getattr(self, "_scaler", None) is not None:
             self._scaler.scale(loss).backward()
             self._scaler.unscale_(self.opt)
-            torch.nn.utils.clip_grad_norm_(self.params, 10.0)
+            grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 5.0)
             self._scaler.step(self.opt)
             self._scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.params, 10.0)
+            grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 5.0)
             self.opt.step()
         bwd_ms = (time.perf_counter() - t_bwd) * 1000.0
         try:
@@ -629,6 +681,37 @@ class DreamerV3Agent:
             pass
 
         # Collect enhanced metrics
+        # LR (first param group)
+        try:
+            lr0 = float(self.opt.param_groups[0].get('lr', 0.0))
+        except Exception:
+            lr0 = 0.0
+
+        # Basic stats for monitoring learning signal
+        adv_mean = float(advantage.mean().detach().cpu())
+        adv_std = float(advantage.std(unbiased=False).detach().cpu())
+        val_mean = float(values.mean().detach().cpu())
+        val_std = float(values.std(unbiased=False).detach().cpu())
+        rew_mean = float(rewards.mean().detach().cpu())
+        rew_std = float(rewards.std(unbiased=False).detach().cpu())
+
+        # TD error stats and explained variance of value
+        td_abs_mean = float(td_error.abs().mean().detach().cpu())
+        td_std = float(td_error.std(unbiased=False).detach().cpu())
+        try:
+            var_y = float(torch.var(target_v.detach(), correction=0).cpu())
+            var_res = float(torch.var((target_v - values.squeeze(-1)).detach(), correction=0).cpu())
+            value_ev = 1.0 - (var_res / (var_y + 1e-8))
+        except Exception:
+            value_ev = 0.0
+
+        # PSNR for reconstruction (assumes 0-1 range)
+        try:
+            mse = float(recon_loss.detach().cpu())
+            world_psnr = 10.0 * float(torch.log10(torch.tensor(1.0 / max(mse, 1e-8))))
+        except Exception:
+            world_psnr = 0.0
+
         metrics = {
             "loss/model_recon": float(recon_loss.detach().cpu()),
             "loss/model_reward": float(reward_loss.detach().cpu()),
@@ -637,6 +720,20 @@ class DreamerV3Agent:
             # expose policy entropy under policy/entropy tag for dashboard spec
             "policy/entropy": float(entropy.detach().cpu()),
             "loss/kl_divergence": float(kl_divergence.mean().detach().cpu()) if kl_divergence.numel() > 1 else float(kl_divergence.detach().cpu()),
+            # grads & lr
+            "optim/grad_global_norm": float(grad_global_norm.detach().cpu()),
+            "optim/lr": lr0,
+            # stats
+            "advantage/mean": adv_mean,
+            "advantage/std": adv_std,
+            "value/mean": val_mean,
+            "value/std": val_std,
+            "reward/batch_mean": rew_mean,
+            "reward/batch_std": rew_std,
+            "value/td_abs_mean": td_abs_mean,
+            "value/td_std": td_std,
+            "value/explained_variance": float(value_ev),
+            "world/psnr_db": world_psnr,
         }
         
         # Add synthetic data metrics if available

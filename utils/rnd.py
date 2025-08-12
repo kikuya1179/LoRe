@@ -49,6 +49,16 @@ class RND(nn.Module):
         return r
 
     def update(self, obs: torch.Tensor) -> float:
+        # Ensure channel count consistency by lightweight projection if needed
+        if obs.dim() == 4 and obs.size(1) != next(self.predictor.net[0].parameters()).size(1):
+            # Simple fix: if channels mismatch, average or tile to match expected channels
+            c_in = obs.size(1)
+            c_exp = int(next(self.predictor.net[0].parameters()).size(1))
+            if c_in > c_exp:
+                obs = obs[:, :c_exp]
+            elif c_in < c_exp:
+                rep = (c_exp + c_in - 1) // c_in
+                obs = obs.repeat(1, rep, 1, 1)[:, :c_exp]
         t = self.target(obs)
         p = self.predictor(obs)
         loss = F.mse_loss(p, t)

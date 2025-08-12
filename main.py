@@ -16,6 +16,10 @@ from .utils.logger import Logger
 from .envs.crafter_env import make_crafter_env
 from .agents.dreamer_v3 import DreamerV3Agent
 from .trainers.trainer import Trainer
+try:
+    from .trainers.async_trainer import AsyncTrainer  # type: ignore
+except Exception:
+    AsyncTrainer = None  # type: ignore
 from .cuda_optimizer import setup_cuda_optimization, optimize_batch_size, warmup_cuda, print_gpu_status
 try:
     from .trainers.enhanced_trainer import EnhancedTrainer  # type: ignore
@@ -68,9 +72,25 @@ def main() -> Optional[int]:
     args = parse_args()
     cfg = override_cfg(load_config(), args)
 
+    # Apply runtime threading limits from config (replaces shell env exports)
+    try:
+        import os as _os
+        # External libs (MKL/NumExpr/OpenMP)
+        _os.environ["OMP_NUM_THREADS"] = str(int(getattr(cfg.train, "omp_num_threads", 1)))
+        _os.environ["MKL_NUM_THREADS"] = str(int(getattr(cfg.train, "mkl_num_threads", 1)))
+        _os.environ["NUMEXPR_MAX_THREADS"] = str(int(getattr(cfg.train, "numexpr_max_threads", 1)))
+    except Exception:
+        pass
+
     set_seed(cfg.train.seed)
 
     # Setup CUDA with comprehensive optimization
+    # process identity for prints
+    try:
+        import os as _os, platform as _pf, time as _time
+        _proc = f"pid={_os.getpid()}@{_pf.node()}"
+    except Exception:
+        _proc = "pid=?"
     if cfg.train.device == "cuda":
         if not torch.cuda.is_available():
             print("[FATAL] CUDA requested but not available!")
@@ -79,7 +99,7 @@ def main() -> Optional[int]:
         # Apply CUDA optimizations
         cuda_status = setup_cuda_optimization()
         print_gpu_status()
-        print(f"[GPU] Applied optimizations: {', '.join(cuda_status['optimizations'])}")
+        print(f"[proc:{_proc}] [GPU] Applied optimizations: {', '.join(cuda_status['optimizations'])}")
         
         device = torch.device("cuda")
         
@@ -92,17 +112,42 @@ def main() -> Optional[int]:
     else:
         device = torch.device("cpu")
         print("[INFO] Using CPU device")
+    # Torch thread control (in both CPU and CUDA cases)
+    try:
+        torch.set_num_threads(int(getattr(cfg.train, "torch_num_threads", 1)))
+    except Exception:
+        pass
+    try:
+        torch.set_num_interop_threads(int(getattr(cfg.train, "torch_num_interop_threads", 1)))
+    except Exception:
+        pass
     # Allow only requested metrics
     allowed = {
+        # env
         "env/episode_return",
-        "env/success_rate",
-        "env/crafter_score",
         "env/mean_episode_return",
+        "env/success_rate",
+        "env/score_percent",
+        "env/crafter_score",
+        # losses & policy
         "loss/model_recon",
         "loss/model_reward",
-        "policy/entropy",
-        "loss/kl_divergence",
         "loss/value",
+        "loss/kl_divergence",
+        "policy/entropy",
+        # learning dynamics / optimizer
+        "advantage/mean",
+        "advantage/std",
+        "value/mean",
+        "value/std",
+        "reward/batch_mean",
+        "reward/batch_std",
+        "value/td_abs_mean",
+        "value/td_std",
+        "value/explained_variance",
+        "world/psnr_db",
+        "optim/grad_global_norm",
+        "optim/lr",
     }
     logger = Logger(log_dir=cfg.log_dir, allowed_tags=allowed)
 
@@ -142,7 +187,8 @@ def main() -> Optional[int]:
         lr=cfg.train.learning_rate,
         gamma=cfg.train.gamma,
         entropy_coef=getattr(cfg.train, "entropy_coef", 0.05),
-        epsilon_greedy=getattr(cfg.train, "epsilon_greedy", 0.0),
+        # ε-greedy は AsyncTrainer 側の温度ソフトマックスと重複させない
+        epsilon_greedy=0.0,
     )
     
     # GPU memory check
@@ -158,7 +204,12 @@ def main() -> Optional[int]:
 
     # Choose trainer
     use_enhanced = bool(getattr(cfg.train, "use_enhanced_trainer", False)) and (EnhancedTrainer is not None)
-    trainer_cls = EnhancedTrainer if use_enhanced else Trainer
+    # Prefer AsyncTrainer when available and CUDA device is used
+    prefer_async = True
+    if prefer_async and AsyncTrainer is not None:
+        trainer_cls = AsyncTrainer  # type: ignore[misc]
+    else:
+        trainer_cls = EnhancedTrainer if use_enhanced else Trainer
     trainer = trainer_cls(  # type: ignore[misc]
         env=env,
         agent=agent,
@@ -169,15 +220,20 @@ def main() -> Optional[int]:
 
     # Final GPU verification before training
     if device.type == "cuda":
-        print(f"\n[GPU] Starting training on {torch.cuda.get_device_name(0)}")
-        print(f"[GPU] Batch size: {cfg.train.batch_size}")
-        print(f"[GPU] Memory available: {(torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()) / 1024**2:.1f}MB")
+        print(f"\n[proc:{_proc}] [GPU] Starting training on {torch.cuda.get_device_name(0)}")
+        print(f"[proc:{_proc}] [GPU] Batch size: {cfg.train.batch_size}")
+        print(f"[proc:{_proc}] [GPU] Memory available: {(torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()) / 1024**2:.1f}MB")
+        # Reset wall clock for clean step=1000 cadence from 0
+        try:
+            logger._t0 = _time.time()
+        except Exception:
+            pass
         
         # Test GPU operations
         with torch.no_grad():
             test_tensor = torch.randn(100, 100, device=device)
             _ = torch.mm(test_tensor, test_tensor)
-        print("[GPU] GPU operations verified")
+        print(f"[proc:{_proc}] [GPU] GPU operations verified")
     
     trainer.train()
     # Final hardware report (GPU/CPU/Memory/OS)
