@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, List, Dict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
 
 @dataclass
@@ -62,9 +61,10 @@ class ConvDecoder(nn.Module):
 
 
 class WorldModel(nn.Module):
-    def __init__(self, obs_channels: int = 1, latent_dim: int = 256) -> None:
+    def __init__(self, obs_channels: int = 1, latent_dim: int = 256, n_actions: int = 7) -> None:
         super().__init__()
         self.encoder = ConvEncoder(obs_channels, latent_dim)
+        # Posterior encoder-driven RSSM (teacher states)
         self.rssm = nn.GRU(input_size=latent_dim, hidden_size=latent_dim, batch_first=True)
         self.decoder = ConvDecoder(obs_channels, latent_dim)
         self.reward_head = nn.Sequential(
@@ -72,6 +72,9 @@ class WorldModel(nn.Module):
             nn.ELU(),
             nn.Linear(256, 1),
         )
+        # Action-conditioned transition for imagination (learned to mimic posterior)
+        self.n_actions = int(n_actions)
+        self.trans_cell = nn.GRUCell(input_size=latent_dim + self.n_actions, hidden_size=latent_dim)
 
     def forward(self, obs_seq: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # obs_seq: [B, T, C, H, W]
@@ -105,6 +108,34 @@ class WorldModel(nn.Module):
         recon = torch.stack(recons, dim=1)  # [B,T,C,H,W]
         reward_pred = torch.stack(rews, dim=1).squeeze(-1)  # [B,T]
         return h_seq, recon, reward_pred
+
+    def transition(self, h: torch.Tensor, action_idx: torch.Tensor) -> torch.Tensor:
+        """One-step action-conditioned transition in latent space.
+        h: [B, latent], action_idx: [B] (long)
+        """
+        B = h.size(0)
+        one_hot = F.one_hot(action_idx.long(), num_classes=self.n_actions).float()
+        inp = torch.cat([h, one_hot.to(h.dtype)], dim=-1)
+        h_next = self.trans_cell(inp, h)
+        return h_next
+
+    def dynamics_loss(self, h_seq: torch.Tensor, action_seq: torch.Tensor) -> torch.Tensor:
+        """Teacher-forced training for the transition to match posterior RSSM states.
+        h_seq: [B,T,latent], action_seq: [B,T]
+        """
+        B, T, D = h_seq.shape
+        if T < 2:
+            return torch.tensor(0.0, device=h_seq.device)
+        h_pred = h_seq[:, 0]  # start from first posterior state
+        loss = 0.0
+        steps = 0
+        for t in range(T - 1):
+            a_t = action_seq[:, t]
+            h_pred = self.transition(h_pred, a_t)
+            target = h_seq[:, t + 1].detach()
+            loss = loss + F.mse_loss(h_pred, target)
+            steps += 1
+        return loss / max(steps, 1)
 
 
 class ActorCritic(nn.Module):
@@ -292,20 +323,37 @@ class DreamerV3Agent:
         latent_dim = int(getattr(model_cfg, "latent_dim", 256))
         llm_features_dim = int(getattr(model_cfg, "llm_features_dim", 0))
 
-        self.world = WorldModel(obs_channels=obs_channels, latent_dim=latent_dim)
+        self.world = WorldModel(obs_channels=obs_channels, latent_dim=latent_dim, n_actions=self.n_actions)
         self.ac = ActorCritic(latent_dim=latent_dim, n_actions=self.n_actions, 
                              llm_features_dim=llm_features_dim)
         
         # Set agent reference for uncertainty gate access
         self.ac._agent_ref = self
         
-        # Enhanced LLM integration with uncertainty gating
+        # Enhanced LLM integration with uncertainty gating (LoRe specification)
+        from ..conf import LoReConfig
+        lore_cfg = getattr(model_cfg, 'lore', LoReConfig()) if hasattr(model_cfg, 'lore') else LoReConfig()
+        
+        # Store LoRe configuration 
+        self.lore_cfg = lore_cfg
+        self.mix_in_imagination = getattr(lore_cfg, "mix_in_imagination", False)
+        
         self.uncertainty_gate = UncertaintyGate(
-            beta_max=getattr(model_cfg, "beta_max", 0.3),
-            delta_target=getattr(model_cfg, "delta_target", 0.1),
-            kl_lr=getattr(model_cfg, "kl_lr", 1e-3),
-            uncertainty_threshold=getattr(model_cfg, "uncertainty_threshold", 0.5)
+            beta_max=getattr(lore_cfg, "beta_max", 0.3),
+            delta_target=getattr(lore_cfg, "delta_target", 0.1),
+            kl_lr=getattr(lore_cfg, "kl_lr", 1e-3),
+            uncertainty_threshold=getattr(lore_cfg, "uncertainty_threshold", 0.5),
+            beta_warmup_steps=getattr(lore_cfg, "beta_warmup_steps", 5000),
+            hysteresis_tau_low=getattr(lore_cfg, "hysteresis_tau_low", 0.4),
+            hysteresis_tau_high=getattr(lore_cfg, "hysteresis_tau_high", 0.6),
+            beta_dropout_p=getattr(lore_cfg, "beta_dropout_p", 0.05)
         )
+        # Actor warmup params from config
+        self.actor_warmup_steps = int(getattr(model_cfg, 'actor_warmup_steps', getattr(getattr(self, 'lore_cfg', object()), 'actor_warmup_steps', 2000)))
+        self.actor_anneal_steps = int(getattr(model_cfg, 'actor_anneal_steps', getattr(getattr(self, 'lore_cfg', object()), 'actor_anneal_steps', 2000)))
+        
+        # PriorNet reference for imagination (set externally)
+        self.priornet_distiller = None
         self.use_llm_features = llm_features_dim > 0
         
         # Value ensemble for uncertainty estimation (optional)
@@ -459,6 +507,8 @@ class DreamerV3Agent:
 
         # batch keys: observation [B,C,H,W], action [B,1], reward [B,1]; we reshape to sequences of T=1
         obs = batch.get("observation").to(self.device, non_blocking=True)
+        if obs.dim() == 3:
+            obs = obs.unsqueeze(0)
         actions = batch.get("action").to(self.device, non_blocking=True)
         # 形状 [B] に正規化し、ロング型へ
         if actions.dtype != torch.long:
@@ -466,8 +516,7 @@ class DreamerV3Agent:
         while actions.ndim > 1 and actions.shape[-1] == 1:
             actions = actions.squeeze(-1)
         # Robust reshape: allow [B], [B,1], or [B,1,1] -> [B]
-        rewards = batch.get("reward").to(self.device, non_blocking=True).float()
-        rewards = rewards.view(-1)
+        rewards = batch.get("reward").to(self.device, non_blocking=True).float().view(-1)
         dones = None
         if "done" in batch.keys(True, True):
             d = batch.get("done").to(self.device, non_blocking=True).float()
@@ -535,8 +584,6 @@ class DreamerV3Agent:
         try:
             if ("next", "observation") in batch.keys(True, True):
                 next_obs = batch.get(("next", "observation")).to(self.device, non_blocking=True)
-                if next_obs.dtype == torch.uint8:
-                    next_obs = next_obs.float().div_(255.0)
                 if next_obs.dim() == 3:
                     next_obs = next_obs.unsqueeze(0)
                 # Encode next obs and get next latent/state
@@ -551,9 +598,17 @@ class DreamerV3Agent:
         except Exception:
             pass
         
-        # Policy logits with uncertainty-based LLM integration
+        # Disable LLM mixing during learning unless explicitly enabled for imagination
+        if not getattr(self, 'lore_cfg', None) or not getattr(self.lore_cfg, 'mix_in_imagination', False):
+            llm_logits_for_update = None
+            llm_mask_for_update = None
+        else:
+            llm_logits_for_update = llm_logits
+            llm_mask_for_update = llm_mask
+
+        # Policy logits with uncertainty-based LLM integration (controlled by config)
         logits_result = self.ac.policy_logits(
-            h, values, llm_features, llm_logits, llm_mask, 
+            h, values, llm_features, llm_logits_for_update, llm_mask_for_update,
             model_error=value_variance, return_uncertainty=True
         )
         
@@ -575,15 +630,17 @@ class DreamerV3Agent:
         with torch.no_grad():
             target_v = self._td0_target(rewards, values_next.detach(), dones).squeeze(-1)
         td_error = (target_v - values.squeeze(-1))
-        # Advantage normalization (reduce variance) with clipping for stability
+        # Advantage stabilization: avoid normalization collapse for tiny batches
         advantage = td_error.detach()
         try:
-            adv_mean = advantage.mean()
-            adv_std = advantage.std(unbiased=False).clamp_min(1e-6)
-            advantage = (advantage - adv_mean) / adv_std
+            if advantage.numel() >= 4:
+                adv_mean = advantage.mean()
+                adv_std = advantage.std(unbiased=False).clamp_min(1e-6)
+                advantage = (advantage - adv_mean) / adv_std
+            # Always clip to limit spikes
             advantage = advantage.clamp(-5.0, 5.0)
         except Exception:
-            pass
+            advantage = advantage.clamp(-5.0, 5.0)
 
         # Robust targets shape
         target_v = target_v.view_as(values.squeeze(-1))
@@ -594,7 +651,7 @@ class DreamerV3Agent:
         kl_divergence = torch.tensor(0.0, device=obs.device)
         kl_penalty = torch.tensor(0.0, device=obs.device)
         
-        if llm_logits is not None:
+        if llm_logits_for_update is not None:
             try:
                 from torch.distributions import Categorical
                 
@@ -654,11 +711,6 @@ class DreamerV3Agent:
         loss = loss_model + loss_ac
 
         fwd_ms = (time.perf_counter() - t_fwd) * 1000.0
-        try:
-            from ..utils.hw_trace import log_event as _hw_log
-            _hw_log('update.forward', 'gpu', fwd_ms)
-        except Exception:
-            pass
 
         self.opt.zero_grad(set_to_none=True)
         t_bwd = time.perf_counter()
@@ -666,19 +718,14 @@ class DreamerV3Agent:
         if self._amp_enabled and getattr(self, "_scaler", None) is not None:
             self._scaler.scale(loss).backward()
             self._scaler.unscale_(self.opt)
-            grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 5.0)
+            grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 2.0)
             self._scaler.step(self.opt)
             self._scaler.update()
         else:
             loss.backward()
-            grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 5.0)
+            grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 2.0)
             self.opt.step()
         bwd_ms = (time.perf_counter() - t_bwd) * 1000.0
-        try:
-            from ..utils.hw_trace import log_event as _hw_log
-            _hw_log('update.backward_step', 'gpu', bwd_ms)
-        except Exception:
-            pass
 
         # Collect enhanced metrics
         # LR (first param group)
@@ -752,7 +799,14 @@ class DreamerV3Agent:
         # Add uncertainty gate metrics
         if uncertainty is not None:
             metrics["uncertainty/mean"] = float(uncertainty.mean().detach().cpu())
-            metrics["uncertainty/std"] = float(uncertainty.std().detach().cpu())
+            try:
+                if uncertainty.numel() > 1:
+                    unc_std = torch.std(uncertainty, unbiased=False)
+                else:
+                    unc_std = torch.tensor(0.0, device=uncertainty.device)
+                metrics["uncertainty/std"] = float(unc_std.detach().cpu())
+            except Exception:
+                metrics["uncertainty/std"] = 0.0
         if beta_values is not None:
             metrics["beta/mean"] = float(beta_values.mean().detach().cpu())
             metrics["beta/std"] = float(beta_values.std().detach().cpu())
@@ -762,6 +816,204 @@ class DreamerV3Agent:
         metrics.update(gate_metrics)
         
         return metrics
+
+    def update_sequence(self, batch: Dict[str, torch.Tensor]) -> dict:
+        """Sequence training: obs_seq [B,T,C,H,W], action_seq [B,T], reward_seq [B,T], done_seq [B,T]."""
+        self.world.train()
+        self.ac.train()
+
+        obs_seq = batch["observation_seq"].to(self.device, non_blocking=True)  # [B,T,C,H,W]
+        next_obs_seq = batch.get("next_observation_seq").to(self.device, non_blocking=True) if "next_observation_seq" in batch else None
+        actions = batch["action_seq"].to(self.device, non_blocking=True)        # [B,T]
+        rewards = batch["reward_seq"].to(self.device, non_blocking=True)        # [B,T]
+        dones = batch["done_seq"].to(self.device, non_blocking=True)            # [B,T]
+
+        B, T = obs_seq.size(0), obs_seq.size(1)
+
+        try:
+            autocast_ctx = torch.amp.autocast('cuda', enabled=self._amp_enabled)
+        except Exception:
+            from torch.cuda.amp import autocast as _old_autocast
+            autocast_ctx = _old_autocast(enabled=self._amp_enabled)
+
+        with autocast_ctx:
+            h_seq, recon_seq, reward_pred_seq = self.world(obs_seq)
+            # reconstruction loss over all steps
+            recon_loss = F.mse_loss(recon_seq, obs_seq)
+            reward_loss = F.mse_loss(reward_pred_seq.squeeze(-1), rewards)
+            # train dynamics to imitate posterior transitions (Dreamer風の教師あり)
+            dyn_loss = self.world.dynamics_loss(h_seq.detach(), actions)
+
+        # Values for each step
+        h_flat = h_seq.reshape(B * T, -1)
+        values = self.ac.value(h_flat).view(B, T)
+
+        # Bootstrap value for last next observation
+        if next_obs_seq is not None:
+            with torch.no_grad():
+                h_next_last, _, _ = self.world(next_obs_seq[:, -1:].contiguous())  # [B,1,D]
+                v_last = self.ac.value(h_next_last[:, 0]).detach()  # [B]
+        else:
+            v_last = torch.zeros(B, device=self.device)
+
+        # GAE(λ) advantages and returns
+        lam = 0.95
+        gamma = self.gamma
+        advantages = torch.zeros(B, T, device=self.device)
+        last_gae = torch.zeros(B, device=self.device)
+        for t in reversed(range(T)):
+            v_t = values[:, t]
+            v_tp1 = values[:, t + 1] if t + 1 < T else v_last
+            r_t = rewards[:, t]
+            d_t = dones[:, t]
+            delta = r_t + gamma * (1.0 - d_t) * v_tp1 - v_t
+            last_gae = delta + gamma * lam * (1.0 - d_t) * last_gae
+            advantages[:, t] = last_gae
+        returns = advantages + values
+
+        # Policy logits per step
+        logits = self.ac.policy_logits(h_flat).view(B, T, -1)
+        logp = F.log_softmax(logits, dim=-1)
+        logp_act = logp.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
+
+        adv = advantages.detach()
+        # Normalize per batch-time if十分大きい
+        if adv.numel() >= 128:
+            adv = (adv - adv.mean()) / (adv.std(unbiased=False).clamp_min(1e-6))
+        adv = adv.clamp(-5.0, 5.0)
+
+        # Actor warmup/anneal to avoid early collapse
+        global_step = float(self.uncertainty_gate.current_step)
+        warm = getattr(self, 'actor_warmup_steps', 2000)
+        anneal = getattr(self, 'actor_anneal_steps', 2000)
+        if global_step < warm:
+            actor_scale = global_step / max(1.0, warm)
+        elif global_step < warm + anneal:
+            # cosine anneal to 1.0
+            import math
+            ratio = (global_step - warm) / max(1.0, anneal)
+            actor_scale = 0.5 * (1.0 - math.cos(math.pi * ratio))
+        else:
+            actor_scale = 1.0
+        policy_loss = actor_scale * (-(logp_act * adv).mean())
+        value_loss = F.mse_loss(values, returns)
+        entropy = -(torch.exp(logp) * logp).sum(-1).mean()
+
+        # World model diagnostics
+        try:
+            mse_val = float(recon_loss.detach().cpu())
+            world_psnr = 10.0 * float(torch.log10(torch.tensor(1.0 / max(mse_val, 1e-8))))
+        except Exception:
+            world_psnr = 0.0
+        reward_mae = float(torch.mean(torch.abs(reward_pred_seq.squeeze(-1) - rewards)).detach().cpu())
+        # Explained variance for value and reward
+        try:
+            var_y_val = float(torch.var(returns.detach().reshape(-1), correction=0).cpu())
+            var_res_val = float(torch.var((returns - values).detach().reshape(-1), correction=0).cpu())
+            value_ev = 1.0 - (var_res_val / (var_y_val + 1e-8))
+        except Exception:
+            value_ev = 0.0
+        try:
+            var_y_r = float(torch.var(rewards.detach().reshape(-1), correction=0).cpu())
+            var_res_r = float(torch.var((rewards - reward_pred_seq.squeeze(-1)).detach().reshape(-1), correction=0).cpu())
+            reward_ev = 1.0 - (var_res_r / (var_y_r + 1e-8))
+        except Exception:
+            reward_ev = 0.0
+
+        loss_model = recon_loss + reward_loss + 0.5 * dyn_loss
+        loss_ac = policy_loss + 1.0 * value_loss - self.entropy_coef * entropy
+        loss = loss_model + loss_ac
+
+        self.opt.zero_grad(set_to_none=True)
+        if self._amp_enabled and getattr(self, "_scaler", None) is not None:
+            self._scaler.scale(loss).backward()
+            self._scaler.unscale_(self.opt)
+            grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 2.0)
+            self._scaler.step(self.opt)
+            self._scaler.update()
+        else:
+            loss.backward()
+            grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 2.0)
+            self.opt.step()
+
+        # Optimizer LR
+        try:
+            lr0 = float(self.opt.param_groups[0].get('lr', 0.0))
+        except Exception:
+            lr0 = 0.0
+
+        return {
+            "loss/model_recon": float(recon_loss.detach().cpu()),
+            "loss/model_reward": float(reward_loss.detach().cpu()),
+            "loss/model_dyn": float(dyn_loss.detach().cpu()),
+            "loss/policy": float(policy_loss.detach().cpu()),
+            "loss/value": float(value_loss.detach().cpu()),
+            "policy/entropy": float(entropy.detach().cpu()),
+            "value/mean": float(values.mean().detach().cpu()),
+            "value/explained_variance": float(value_ev),
+            "reward/mae": float(reward_mae),
+            "reward/explained_variance": float(reward_ev),
+            "world/psnr_db": float(world_psnr),
+            "world/recon_mse": float(mse_val),
+            "optim/grad_global_norm": float(grad_global_norm.detach().cpu()) if 'grad_global_norm' in locals() else 0.0,
+            "optim/lr": lr0,
+        }
+    
+    def _generate_imagination_priors(self, h_seq: torch.Tensor, context_batch: List[Dict] = None) -> Optional[torch.Tensor]:
+        """Generate PriorNet logits for imagination rollouts."""
+        if not self.mix_in_imagination or not self.priornet_distiller:
+            return None
+        
+        # Use PriorNet to generate priors for latent states
+        if not self.priornet_distiller.should_use_priornet():
+            return None
+        
+        batch_size, seq_len = h_seq.shape[:2]
+        prior_logits_list = []
+        
+        # For each step in the imagination sequence
+        for t in range(seq_len):
+            h_t = h_seq[:, t]  # [batch_size, latent_dim]
+            
+            # Create dummy observations from latent states (simplified)
+            # In practice, you'd decode h_t back to observation space
+            dummy_obs = torch.zeros(batch_size, 1, 64, 64, device=h_t.device)
+            
+            # Create dummy context
+            dummy_context = {'mission': 'explore', 'remaining_steps': 50}
+            
+            try:
+                # Get PriorNet prediction for this latent state  
+                with torch.no_grad():
+                    # Convert to numpy for PriorNet interface
+                    obs_np = dummy_obs[0].cpu().numpy()  # Take first in batch
+                    prior_response = self.priornet_distiller.predict(obs_np, dummy_context)
+                    
+                    if prior_response and 'policy' in prior_response:
+                        prior_logits = torch.tensor(
+                            prior_response['policy']['logits'], 
+                            device=h_t.device, 
+                            dtype=torch.float32
+                        ).unsqueeze(0).expand(batch_size, -1)
+                        prior_logits_list.append(prior_logits)
+                    else:
+                        # Fallback to zero logits if PriorNet fails
+                        zero_logits = torch.zeros(batch_size, self.n_actions, device=h_t.device)
+                        prior_logits_list.append(zero_logits)
+                        
+            except Exception:
+                # Fallback on any error
+                zero_logits = torch.zeros(batch_size, self.n_actions, device=h_t.device)
+                prior_logits_list.append(zero_logits)
+        
+        if prior_logits_list:
+            return torch.stack(prior_logits_list, dim=1)  # [batch_size, seq_len, n_actions]
+        
+        return None
+    
+    def set_priornet_distiller(self, distiller):
+        """Set PriorNet distiller reference for imagination integration."""
+        self.priornet_distiller = distiller
     
     def _bitmask_to_tensor(self, mask_bits: torch.Tensor, n_actions: int) -> torch.Tensor:
         """Convert bitmask to action mask tensor."""
@@ -776,14 +1028,31 @@ class DreamerV3Agent:
 
 
 class UncertaintyGate:
-    """Uncertainty-based β gating for LLM integration following LoRe specification."""
+    """Enhanced uncertainty-based β gating for LLM integration following LoRe specification."""
     
     def __init__(self, beta_max: float = 0.3, delta_target: float = 0.1, 
-                 kl_lr: float = 1e-3, uncertainty_threshold: float = 0.5):
+                 kl_lr: float = 1e-3, uncertainty_threshold: float = 0.5,
+                 beta_warmup_steps: int = 5000, hysteresis_tau_low: float = 0.4,
+                 hysteresis_tau_high: float = 0.6, beta_dropout_p: float = 0.05):
         self.beta_max = beta_max
         self.delta_target = delta_target
         self.kl_lr = kl_lr
         self.uncertainty_threshold = uncertainty_threshold
+        
+        # Enhanced parameters from LoRe specification
+        self.beta_warmup_steps = beta_warmup_steps
+        self.hysteresis_tau_low = hysteresis_tau_low
+        self.hysteresis_tau_high = hysteresis_tau_high
+        self.beta_dropout_p = beta_dropout_p
+        
+        # State tracking for enhanced features
+        self.current_step = 0
+        self.uncertainty_state = 'low'  # 'low' or 'high'
+        
+        # EMA for uncertainty threshold computation
+        self.uncertainty_ema = torch.tensor(0.5, dtype=torch.float32)
+        self.uncertainty_queue = []  # For percentile-based threshold
+        self.queue_size = 5000
         
         # Lagrange multiplier for target KL constraint
         self.lambda_kl = torch.tensor(0.01, dtype=torch.float32)
@@ -797,6 +1066,7 @@ class UncertaintyGate:
         # Metrics tracking
         self.kl_history = []
         self.beta_history = []
+        self.warmup_schedule = []
     
     def to(self, device: torch.device) -> None:
         """Move tensors to device."""
@@ -871,10 +1141,78 @@ class UncertaintyGate:
         return torch.clamp(uncertainty, 0.0, 2.0)
     
     def compute_beta(self, uncertainty: torch.Tensor) -> torch.Tensor:
-        """Compute β gating parameter based on uncertainty."""
-        # β increases with uncertainty, capped at beta_max
-        beta = self.beta_max * torch.sigmoid(2.0 * (uncertainty - self.uncertainty_threshold))
-        return torch.clamp(beta, 0.0, self.beta_max)
+        """Enhanced β computation with warmup, hysteresis, and dropout."""
+        batch_size = uncertainty.size(0)
+        device = uncertainty.device
+        
+        # Update internal step counter
+        self.current_step += 1
+        
+        # 1. Beta warmup schedule
+        if self.current_step < self.beta_warmup_steps:
+            warmup_factor = self.current_step / self.beta_warmup_steps
+            self.warmup_schedule.append(warmup_factor)
+            if len(self.warmup_schedule) > 1000:
+                self.warmup_schedule.pop(0)
+        else:
+            warmup_factor = 1.0
+        
+        # 2. Update uncertainty queue and compute adaptive threshold
+        with torch.no_grad():
+            unc_mean = uncertainty.mean().item()
+            self.uncertainty_queue.append(unc_mean)
+            if len(self.uncertainty_queue) > self.queue_size:
+                self.uncertainty_queue.pop(0)
+            
+            # Update EMA
+            self.uncertainty_ema = (self.ema_decay * self.uncertainty_ema + 
+                                  (1 - self.ema_decay) * unc_mean)
+            
+            # Compute adaptive threshold (median of recent samples)
+            if len(self.uncertainty_queue) >= 100:
+                import statistics
+                adaptive_threshold = statistics.median(self.uncertainty_queue[-1000:])
+            else:
+                adaptive_threshold = self.uncertainty_threshold
+        
+        # 3. Hysteresis-based state switching
+        with torch.no_grad():
+            if self.uncertainty_state == 'low' and unc_mean > self.hysteresis_tau_high:
+                self.uncertainty_state = 'high'
+            elif self.uncertainty_state == 'high' and unc_mean < self.hysteresis_tau_low:
+                self.uncertainty_state = 'low'
+        
+        # 4. Compute base β with adaptive threshold
+        if self.uncertainty_state == 'high':
+            base_beta = self.beta_max * torch.sigmoid(2.0 * (uncertainty - adaptive_threshold))
+        else:
+            # Lower β when in low uncertainty state
+            base_beta = self.beta_max * 0.5 * torch.sigmoid(2.0 * (uncertainty - adaptive_threshold))
+        
+        # 5. Apply warmup factor
+        beta = base_beta * warmup_factor
+        
+        # 6. Beta dropout for training stability
+        if self.training and torch.rand(1).item() < self.beta_dropout_p:
+            beta = torch.zeros_like(beta)
+        
+        beta = torch.clamp(beta, 0.0, self.beta_max)
+        
+        # Store for metrics
+        self.beta_history.extend(beta.detach().cpu().tolist())
+        if len(self.beta_history) > 1000:
+            self.beta_history = self.beta_history[-500:]
+        
+        return beta
+    
+    @property
+    def training(self) -> bool:
+        """Check if in training mode (simplified heuristic)."""
+        return True  # Could be set by parent agent
+    
+    def set_training(self, training: bool) -> None:
+        """Set training mode."""
+        self._training = training
     
     def update_kl_constraint(self, kl_divergence: torch.Tensor) -> None:
         """Update Lagrange multiplier for target KL constraint."""
@@ -901,17 +1239,36 @@ class UncertaintyGate:
         return float(self.lambda_kl.detach())
     
     def get_metrics(self) -> dict[str, float]:
-        """Get gating metrics for monitoring."""
+        """Get enhanced gating metrics for monitoring."""
         avg_kl = sum(self.kl_history[-100:]) / max(len(self.kl_history[-100:]), 1)
         avg_beta = sum(self.beta_history[-100:]) / max(len(self.beta_history[-100:]), 1) if self.beta_history else 0.0
+        beta_std = 0.0
+        if len(self.beta_history) >= 10:
+            import statistics
+            beta_std = statistics.stdev(self.beta_history[-100:])
+        
+        # Compute current warmup factor
+        current_warmup = min(1.0, self.current_step / self.beta_warmup_steps) if self.beta_warmup_steps > 0 else 1.0
+        
+        # Adaptive threshold
+        adaptive_threshold = self.uncertainty_threshold
+        if len(self.uncertainty_queue) >= 100:
+            import statistics
+            adaptive_threshold = statistics.median(self.uncertainty_queue[-1000:])
         
         return {
             'uncertainty_gate/avg_kl': avg_kl,
             'uncertainty_gate/target_kl': self.delta_target,
             'uncertainty_gate/lambda_kl': float(self.lambda_kl.detach()),
             'uncertainty_gate/avg_beta': avg_beta,
+            'uncertainty_gate/beta_std': beta_std,
             'uncertainty_gate/entropy_ema': float(self.entropy_ema.detach()),
             'uncertainty_gate/value_var_ema': float(self.value_var_ema.detach()),
+            'uncertainty_gate/uncertainty_ema': float(self.uncertainty_ema.detach()),
+            'uncertainty_gate/adaptive_threshold': adaptive_threshold,
+            'uncertainty_gate/warmup_progress': current_warmup,
+            'uncertainty_gate/uncertainty_state': 1.0 if self.uncertainty_state == 'high' else 0.0,
+            'uncertainty_gate/current_step': float(self.current_step),
         }
 
 

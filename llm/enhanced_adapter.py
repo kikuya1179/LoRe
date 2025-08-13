@@ -37,11 +37,16 @@ class LLMAdapterConfigV2:
 class EnhancedLLMAdapter:
     """Enhanced LLM adapter with batching, caching, and safe execution."""
     
-    def __init__(self, cfg: Optional[LLMAdapterConfigV2] = None):
+    def __init__(self, num_actions: int, cfg: Optional[LLMAdapterConfigV2] = None):
         self.cfg = cfg or LLMAdapterConfigV2()
+        self.num_actions = num_actions
         self._client = None
         self.code_store = CodeKVStore()
         self.dsl_executor = DSLExecutor(timeout_ms=int(self.cfg.timeout_s * 1000))
+        
+        # Temperature estimation for logits normalization
+        self.temperature = 1.0
+        self.temperature_estimated = False
         
         # Caching
         self._cache: Dict[str, Tuple[CodeOut, float]] = {}  # hash -> (result, timestamp)
@@ -203,69 +208,137 @@ class EnhancedLLMAdapter:
             self.failed_calls += len(obs_batch)
             return [None] * len(obs_batch)
     
+    def get_action_logits(self, obs_np: np.ndarray, context: Dict[str, Any]) -> Optional[CodeOut]:
+        """Get action logits for MiniGrid environment"""
+        result = self.infer(obs_np, context, self.num_actions)
+        if result and result.policy and 'logits' in result.policy:
+            # Apply temperature scaling and centering
+            logits = np.array(result.policy['logits'])
+            if len(logits) == self.num_actions:
+                # Center logits
+                logits = logits - np.mean(logits)
+                # Apply temperature scaling
+                logits = logits / self.temperature
+                result.policy['logits'] = logits.tolist()
+                return result
+        return None
+    
+    def estimate_temperature(self, sample_obs: List[np.ndarray], 
+                           sample_contexts: List[Dict[str, Any]],
+                           reference_logits: List[np.ndarray]) -> None:
+        """Estimate temperature for logits alignment"""
+        if self.temperature_estimated or not self.cfg.enabled:
+            return
+            
+        llm_responses = self.infer_batch(sample_obs, sample_contexts, self.num_actions)
+        valid_pairs = []
+        
+        for llm_resp, ref_logits in zip(llm_responses, reference_logits):
+            if (llm_resp and llm_resp.policy and 'logits' in llm_resp.policy and 
+                len(llm_resp.policy['logits']) == self.num_actions):
+                llm_logits = np.array(llm_resp.policy['logits'])
+                # Center both
+                llm_logits = llm_logits - np.mean(llm_logits)
+                ref_logits_centered = ref_logits - np.mean(ref_logits)
+                valid_pairs.append((llm_logits, ref_logits_centered))
+        
+        if len(valid_pairs) >= 3:
+            # Find temperature that minimizes softmax distance
+            best_temp = 1.0
+            best_dist = float('inf')
+            
+            for temp in np.linspace(0.5, 3.0, 20):
+                total_dist = 0.0
+                for llm_logits, ref_logits in valid_pairs:
+                    scaled_llm = llm_logits / temp
+                    llm_probs = np.exp(scaled_llm) / np.sum(np.exp(scaled_llm))
+                    ref_probs = np.exp(ref_logits) / np.sum(np.exp(ref_logits))
+                    total_dist += np.sum((llm_probs - ref_probs) ** 2)
+                
+                if total_dist < best_dist:
+                    best_dist = total_dist
+                    best_temp = temp
+            
+            self.temperature = best_temp
+            self.temperature_estimated = True
+    
     def _build_prompt(self, obs: np.ndarray, context: Dict[str, Any], 
                      num_actions: int) -> str:
-        """Build LLM prompt for Crafter environment."""
-        # Observation summary
-        obs_summary = {
-            'shape': list(obs.shape),
-            'mean_value': float(np.mean(obs)),
-            'unique_colors': len(np.unique(obs.flatten()[:100])),  # Sample
+        """Build LLM prompt for MiniGrid environment."""
+        # Extract MiniGrid specific context
+        mission = context.get('mission', '')
+        remaining_steps = context.get('remaining_steps', 0)
+        
+        # Simplified observation representation for MiniGrid
+        # Convert grid to symbolic representation
+        obs_str = self._grid_to_string(obs)
+        
+        # Field of view representation
+        fov_summary = {
+            'size': list(obs.shape[:2]),
+            'agent_view': 'partial' if obs.shape[0] < 20 else 'full'
         }
         
-        # Context summary
-        inventory = context.get('inventory', {})
-        health = context.get('health', 100)
-        
-        if self.cfg.use_dsl:
-            prompt = f"""You are a Crafter game planner. Given the observation and context below, generate a DSL expression that returns a dictionary with game analysis.
+        # MiniGrid specific prompt
+        prompt = f"""You are a MiniGrid navigation agent. Analyze the current state and provide action guidance.
 
-Observation: {obs_summary}
-Context: inventory={inventory}, health={health}
-Actions: {num_actions} discrete actions available
+Grid View:
+{obs_str}
 
-Return ONLY a valid Python dictionary expression using these DSL functions:
-- count_pixels(color): Count pixels of specific color
-- has_item(item): Check if item in inventory  
-- distance_to(target): Distance to target (0-1)
-- goal_progress(goal): Progress toward goal (0-1)
-- health_ratio(): Health as ratio (0-1)
-- inventory_full(): Whether inventory is full
+Mission: {mission}
+Remaining Steps: {remaining_steps}
+Actions: 0=left, 1=right, 2=forward, 3=pickup, 4=drop, 5=toggle, 6=done (total: {num_actions})
 
-Example output:
+Return JSON with action logits and analysis:
 {{
-    "features": [count_pixels(64)/100.0, distance_to("wood"), health_ratio()-0.5],
-    "subgoal": {{"id": "collect_wood", "tau": 10}} if not has_item("wood") else None,
-    "r_shaped": 0.1 if has_item("wood") else -0.05,
-    "policy": {{"logits": [0.2, -0.1] + [0.0] * 15}},
-    "mask": [1] * {num_actions},
-    "confidence": 0.8,
-    "notes": "Collecting resources"
+    "policy": {{"logits": [{num_actions} float values]}},
+    "mask": [1, 1, 1, 1, 1, 1, 1],
+    "confidence": 0.0-1.0,
+    "features": [2-5 strategic features in range [-2, 2]],
+    "r_shaped": small reward bonus/penalty [-0.1, 0.1],
+    "notes": "brief reasoning"
 }}
 
-Features must be in range [-3, 3], r_shaped in [-0.2, 0.2], confidence in [0, 1].
-"""
-        else:
-            # Free-form JSON prompt
-            prompt = f"""Analyze this Crafter game state and return strategic guidance as JSON.
+Focus on:
+- Navigation toward goal objects
+- Avoiding obstacles/walls
+- Efficient pathfinding
+- Mission completion strategy
 
-Observation shape: {obs_summary['shape']}, mean: {obs_summary['mean_value']:.3f}
-Inventory: {inventory}  
-Health: {health}
-Available actions: {num_actions}
-
-Return JSON with:
-- "features": list of 2-8 numeric features [-3, 3] describing game state
-- "r_shaped": small reward shaping [-0.2, 0.2] for current situation  
-- "policy": {{"logits": [{num_actions} values]}} for action preferences
-- "mask": [{num_actions} values of 0 or 1] for valid actions
-- "confidence": 0.0-1.0 confidence in recommendations
-- "subgoal": {{"id": "goal_name", "tau": steps}} for multi-step objectives
-- "notes": brief explanation
-
-Example: {{"features": [0.5, -0.2], "r_shaped": 0.05, "confidence": 0.7, "mask": [1]*{num_actions}}}"""
+Example: {{"policy": {{"logits": [0.1, -0.2, 0.8, -0.5, -0.3, 0.0, -0.1]}}, "mask": [1]*{num_actions}, "confidence": 0.7}}"""
         
         return prompt
+    
+    def _grid_to_string(self, obs: np.ndarray) -> str:
+        """Convert MiniGrid observation to text representation"""
+        if len(obs.shape) != 3 or obs.shape[2] != 3:
+            return "Invalid observation format"
+        
+        # MiniGrid object encoding (simplified)
+        obj_map = {
+            0: ' ',  # empty
+            1: '#',  # wall  
+            2: 'D',  # door
+            3: 'K',  # key
+            4: 'B',  # ball
+            5: 'X',  # box
+            6: 'G',  # goal
+            10: '@', # agent
+        }
+        
+        grid_str = ""
+        height, width = obs.shape[:2]
+        
+        for y in range(height):
+            row = ""
+            for x in range(width):
+                # Get object type from first channel
+                obj_type = int(obs[y, x, 0])
+                char = obj_map.get(obj_type, '?')
+                row += char
+            grid_str += row + "\n"
+        
+        return grid_str.strip()
     
     def _call_cli_batch(self, prompts: List[str]) -> List[str]:
         """Call CLI in batch mode."""
@@ -331,33 +404,73 @@ Example: {{"features": [0.5, -0.2], "r_shaped": 0.05, "confidence": 0.7, "mask":
     
     def _process_response(self, response: str, obs: np.ndarray, 
                          context: Dict[str, Any], num_actions: int) -> Optional[CodeOut]:
-        """Process LLM response into CodeOut."""
+        """Process LLM response into CodeOut with enhanced validation."""
         if not response.strip():
             return None
         
         try:
-            if self.cfg.use_dsl:
-                # Execute DSL code safely
-                result = self.dsl_executor.execute(response, obs, context)
-                if result and result.validate(num_actions):
-                    return result
-            else:
-                # Parse JSON response
-                data = json.loads(response)
-                result = CodeOut(
-                    features=data.get('features', []),
-                    subgoal=data.get('subgoal'),
-                    r_shaped=float(data.get('r_shaped', 0.0)),
-                    policy=data.get('policy'),
-                    mask=data.get('mask'),
-                    confidence=float(data.get('confidence', 0.5)),
-                    notes=str(data.get('notes', '')),
-                )
-                
-                if result.validate(num_actions):
-                    return result
+            # Parse JSON response
+            data = json.loads(response)
             
-        except Exception:
+            # Extract and validate logits
+            policy_data = data.get('policy', {})
+            logits = policy_data.get('logits', [])
+            
+            if not isinstance(logits, list) or len(logits) != num_actions:
+                return None
+            
+            # Validate logits are numbers and not NaN/inf
+            try:
+                logits_array = np.array(logits, dtype=np.float32)
+                if np.any(np.isnan(logits_array)) or np.any(np.isinf(logits_array)):
+                    return None
+                # Clamp extreme values
+                logits_array = np.clip(logits_array, -10.0, 10.0)
+                logits = logits_array.tolist()
+            except (ValueError, TypeError):
+                return None
+            
+            # Validate mask
+            mask = data.get('mask', [1] * num_actions)
+            if not isinstance(mask, list) or len(mask) != num_actions:
+                mask = [1] * num_actions
+            
+            # Ensure mask contains only 0s and 1s
+            mask = [1 if x else 0 for x in mask]
+            
+            # Validate other fields
+            features = data.get('features', [])
+            if not isinstance(features, list):
+                features = []
+            
+            r_shaped = data.get('r_shaped', 0.0)
+            try:
+                r_shaped = float(r_shaped)
+                r_shaped = np.clip(r_shaped, -0.2, 0.2)
+            except (ValueError, TypeError):
+                r_shaped = 0.0
+            
+            confidence = data.get('confidence', 0.5)
+            try:
+                confidence = float(confidence)
+                confidence = np.clip(confidence, 0.0, 1.0)
+            except (ValueError, TypeError):
+                confidence = 0.5
+            
+            result = CodeOut(
+                features=features,
+                subgoal=data.get('subgoal'),
+                r_shaped=r_shaped,
+                policy={'logits': logits},
+                mask=mask,
+                confidence=confidence,
+                notes=str(data.get('notes', '')),
+            )
+            
+            if result.validate(num_actions):
+                return result
+            
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             pass
         
         return None
