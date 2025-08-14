@@ -17,7 +17,7 @@ from .dsl_executor import DSLExecutor
 
 @dataclass
 class LLMAdapterConfigV2:
-    enabled: bool = False
+    enabled: bool = True
     model: str = "gemini-2.5-flash-lite"
     timeout_s: float = 2.5
     api_retries: int = 2

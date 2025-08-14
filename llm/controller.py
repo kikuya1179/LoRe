@@ -75,6 +75,11 @@ class LLMController:
         key = self._key(obs_np, context)
         novelty = 0.0 if key in self.cache else 1.0
 
+        # Initialize missing EMA trackers lazily for backward compatibility
+        if not hasattr(self, 'td_error_ema'):
+            self.td_error_ema = 0.0
+        if not hasattr(self, 'td_error_ema_alpha'):
+            self.td_error_ema_alpha = 0.05
         # Trigger conditions
         should_call = self.llm_adapter.should_call_llm(obs_np, td_error=td_error, performance=reward, novelty=novelty)
         if not should_call:
@@ -147,15 +152,18 @@ class LLMController:
         # Trigger state
         self.reward_history = deque(maxlen=config.plateau_frames)
         self.success_history = deque(maxlen=config.plateau_frames)
-        self.td_error_ema = 0.0
-        self.td_error_ema_alpha = 0.01
+        # TD error z-score trackers (EMA mean/std)
+        self.td_mean = 0.0
+        self.td_var = 1e-6
+        self.td_alpha = 0.01
         
         # Novelty tracking (simplified state hash counting)
         self.state_counts = defaultdict(int)
         self.max_cache_size = 10000
         
-        # Response cache
-        self.response_cache: Dict[str, CodeOut] = {}
+        # Response cache with TTL and local cooldown per key
+        # key -> {response, ts, hits, local_cd}
+        self.response_cache: Dict[str, Dict[str, Any]] = {}
         self.cache_hits = 0
         self.cache_misses = 0
         
@@ -170,6 +178,41 @@ class LLMController:
             'invalid_response': 0,
             'priornet_used': 0
         }
+
+        # TD error EMA trackers (for trigger logic)
+        self.td_error_ema: float = 0.0
+        self.td_error_ema_alpha: float = getattr(self.config, 'td_error_ema_alpha', 0.05)
+
+        # Additional guard params
+        self.beta_min = getattr(self.lore_config, 'beta_min', 0.1)
+        # Hysteresis thresholds
+        self.tau_low = getattr(self.lore_config, 'hysteresis_tau_low', 0.4)
+        self.tau_high = getattr(self.lore_config, 'hysteresis_tau_high', 0.6)
+        self.trigger_state = {'plateau': False, 'novelty': False, 'td': False}
+
+        # Cache TTL / local cooldown
+        self.cache_ttl_steps = getattr(config, 'cache_ttl_steps', 500)
+        self.cache_ttl_hits = getattr(config, 'cache_ttl_hits', 3)
+        self.key_local_cooldown_steps = getattr(config, 'key_local_cooldown_steps', 50)
+
+        # Novelty adaptive probability
+        self.novelty_p_max = getattr(config, 'novelty_p_max', 0.3)
+        self.novelty_a = getattr(config, 'novelty_a', 0.2)
+
+        # Plateau thresholds
+        self.plateau_w = getattr(config, 'plateau_frames', 1000)
+        self.plateau_tau = getattr(config, 'plateau_tau', 0.05)  # relative to reward range
+        self.plateau_grad_thresh = getattr(config, 'plateau_grad_thresh', 1e-3)
+
+        # Uplift/backoff
+        self.uplift_horizon = getattr(config, 'uplift_horizon', 50)
+        self.backoff_M = getattr(config, 'backoff_M', 3)
+        self.backoff_cooldown_max = getattr(config, 'backoff_cooldown_max', 2000)
+        self.cooldown_extra_success = getattr(config, 'success_cooldown_steps', 500)
+        self._reward_cumsum = 0.0
+        self._reward_cumsum_history: Dict[int, float] = {}
+        self._pending_calls: deque[Tuple[int, float]] = deque(maxlen=100)
+        self._ineffective_streak = 0
         
         # LLM adapter and PriorNet distiller
         self.llm_adapter = EnhancedLLMAdapter(num_actions)
@@ -188,7 +231,7 @@ class LLMController:
     
     def request(self, obs_np: np.ndarray, context: Dict[str, Any], 
                 reward: float, done: bool, td_error: float, 
-                step: int) -> Optional[CodeOut]:
+                step: int, beta_est: float | None = None) -> Optional[CodeOut]:
         """
         Main request method that checks all conditions and triggers
         
@@ -207,7 +250,7 @@ class LLMController:
         self.reward_history.append(reward)
         self.success_history.append(1.0 if done and reward > 0 else 0.0)
         self.td_error_ema = (1 - self.td_error_ema_alpha) * self.td_error_ema + \
-                           self.td_error_ema_alpha * abs(td_error)
+                            self.td_error_ema_alpha * abs(td_error)
         
         if done and reward > 0:
             self.last_success_step = step
@@ -220,17 +263,27 @@ class LLMController:
         # Check cooldown
         if self.cooldown_remaining > 0:
             self.trigger_counts['cooldown'] += 1
+            # allow cache bypass if key-local cooldown is zero and TTL valid
+            state_hash = self._hash_state(obs_np, context)
+            cached = self._get_cache_if_valid(state_hash, step, allow_bypass=True)
+            if cached is not None:
+                self.trigger_counts['cache_hit'] += 1
+                return cached
             return None
             
-        # Generate state hash for novelty and caching
+        # Generate state hash for noveltyとキャッシュ
         state_hash = self._hash_state(obs_np, context)
         
-        # Check cache first
-        if state_hash in self.response_cache:
-            self.cache_hits += 1
+        # Cache fast-path with TTL and local cooldown
+        cached = self._get_cache_if_valid(state_hash, step)
+        if cached is not None:
             self.trigger_counts['cache_hit'] += 1
-            return self.response_cache[state_hash]
+            return cached
         
+        # β gate: low-uncertainty states skip
+        if beta_est is not None and beta_est < self.beta_min:
+            return None
+
         # Try PriorNet first if available and ready
         if (self.priornet_distiller and 
             self.priornet_distiller.should_use_priornet() and
@@ -257,7 +310,7 @@ class LLMController:
                 
                 return response
             
-        # Check trigger conditions for LLM call
+        # Check trigger conditions for LLM call (with hysteresis)
         if not self._should_trigger(state_hash, step, td_error):
             return None
             
@@ -284,15 +337,22 @@ class LLMController:
                     confidence=response.confidence if hasattr(response, 'confidence') else 1.0
                 )
             
-            # Cache response
+            # Cache response with TTL and local cooldown reset
             if len(self.response_cache) < self.max_cache_size:
-                self.response_cache[state_hash] = response
+                self.response_cache[state_hash] = {
+                    'response': response,
+                    'ts': step,
+                    'hits': 0,
+                    'local_cd': self.key_local_cooldown_steps,
+                }
                 
-            # Set cooldown
+            # Set cooldown（成功時は延長）
+            self.cooldown_remaining = self.config.cooldown_steps
             if done and reward > 0:
-                self.cooldown_remaining = self.config.success_cooldown_steps
-            else:
-                self.cooldown_remaining = self.config.cooldown_steps
+                self.cooldown_remaining += self.cooldown_extra_success
+
+            # Track for uplift/backoff
+            self._pending_calls.append((step, self._reward_cumsum))
                 
             return response
             
@@ -303,36 +363,56 @@ class LLMController:
     
     def _should_trigger(self, state_hash: str, step: int, td_error: float) -> bool:
         """Check if any trigger conditions are met"""
-        
-        # Plateau detection
-        if len(self.reward_history) >= self.config.plateau_frames:
-            recent_rewards = list(self.reward_history)[-self.config.plateau_frames//2:]
-            older_rewards = list(self.reward_history)[:self.config.plateau_frames//2]
-            
-            if len(recent_rewards) > 0 and len(older_rewards) > 0:
-                recent_mean = np.mean(recent_rewards)
-                older_mean = np.mean(older_rewards)
-                improvement = recent_mean - older_mean
-                
-                if abs(improvement) < 0.01:  # Plateau threshold
-                    self.trigger_counts['plateau'] += 1
-                    return True
+        # Plateau detection（統計化）
+        plateau_flag = False
+        if len(self.reward_history) >= self.plateau_w:
+            half = self.plateau_w // 2
+            recent = list(self.reward_history)[-half:]
+            older = list(self.reward_history)[:half]
+            if recent and older:
+                r_mean = float(np.mean(recent))
+                o_mean = float(np.mean(older))
+                improvement = abs(r_mean - o_mean)
+                # 近似の勾配（一次差分の平均）
+                grad = 0.0
+                if len(recent) >= 2:
+                    diffs = np.diff(recent)
+                    grad = float(np.mean(diffs))
+                plateau_raw = (improvement < self.plateau_tau) and (abs(grad) < self.plateau_grad_thresh)
+                # Hysteresis on plateau: simple state latch
+                if self.trigger_state['plateau']:
+                    plateau_flag = plateau_raw or (improvement < self.plateau_tau * 1.2)
+                    if not plateau_flag:
+                        self.trigger_state['plateau'] = False
+                else:
+                    plateau_flag = plateau_raw
+                    if plateau_flag:
+                        self.trigger_state['plateau'] = True
         
         # Novelty detection
         self.state_counts[state_hash] += 1
-        if self.state_counts[state_hash] <= 2:  # Rarely seen state
-            if np.random.random() < self.config.novelty_threshold:
-                self.trigger_counts['novelty'] += 1
-                return True
+        cnt = self.state_counts[state_hash]
+        p = min(self.novelty_p_max, self.novelty_a / max(1, cnt))
+        novelty_flag = (np.random.random() < p)
         
         # TD error spike
-        if self.td_error_ema > 0:  # Avoid division by zero
-            normalized_td = abs(td_error) / (self.td_error_ema + 1e-8)
-            if normalized_td > self.config.td_error_threshold:
-                self.trigger_counts['td_error'] += 1
-                return True
-        
-        return False
+        # Update EMA mean/std
+        delta = td_error - self.td_mean
+        self.td_mean += self.td_alpha * delta
+        self.td_var = (1 - self.td_alpha) * self.td_var + self.td_alpha * (td_error - self.td_mean) ** 2
+        td_std = max(self.td_var ** 0.5, 1e-6)
+        z = abs(td_error - self.td_mean) / td_std
+        td_flag = (z > getattr(self.config, 'td_error_threshold', 2.0))
+
+        # Hysteresis combine
+        trigger = plateau_flag or novelty_flag or td_flag
+        if plateau_flag:
+            self.trigger_counts['plateau'] += 1
+        if novelty_flag:
+            self.trigger_counts['novelty'] += 1
+        if td_flag:
+            self.trigger_counts['td_error'] += 1
+        return trigger
     
     def _hash_state(self, obs_np: np.ndarray, context: Dict[str, Any]) -> str:
         """Generate hash for state observation and context"""
@@ -363,8 +443,58 @@ class LLMController:
         if self.priornet_distiller:
             priornet_stats = self.priornet_distiller.get_statistics()
             stats.update(priornet_stats)
+        # Call rate & backoff metrics
+        stats.update({
+            'llm_call_rate_per_1k': self.calls_used / 10.0,
+            'llm_key_local_cd_keys': sum(1 for v in self.response_cache.values() if v.get('local_cd', 0) > 0),
+            'llm_cache_size': len(self.response_cache),
+            'llm_ineffective_streak': self._ineffective_streak,
+        })
         
         return stats
+
+    def record_reward(self, step: int, reward: float, done: bool):
+        """Record reward stream for plateau/uplift/backoff."""
+        self.reward_history.append(float(reward))
+        self._reward_cumsum += float(reward)
+        self._reward_cumsum_history[step] = self._reward_cumsum
+        # Evaluate pending calls after horizon
+        while self._pending_calls and step - self._pending_calls[0][0] >= self.uplift_horizon:
+            s0, r0 = self._pending_calls.popleft()
+            uplift = self._reward_cumsum - r0
+            if uplift <= 0.0:
+                self._ineffective_streak += 1
+                # Backoff: increase cooldown a bit
+                self.cooldown_remaining = min(self.cooldown_remaining * 2 + 10, self.backoff_cooldown_max)
+                # Reduce novelty aggressiveness slightly
+                self.novelty_a = max(0.05, self.novelty_a * 0.9)
+            else:
+                self._ineffective_streak = 0
+
+    def notify_success(self, step: int):
+        """Extend cooldown on success."""
+        self.cooldown_remaining += self.cooldown_extra_success
+
+    def _get_cache_if_valid(self, state_hash: str, step: int, allow_bypass: bool = False) -> Optional[CodeOut]:
+        entry = self.response_cache.get(state_hash)
+        if not entry:
+            return None
+        # local cooldown
+        if entry['local_cd'] > 0 and not allow_bypass:
+            entry['local_cd'] -= 1
+            return None
+        # TTL
+        if (step - entry['ts'] > self.cache_ttl_steps) or (entry['hits'] >= self.cache_ttl_hits):
+            # expire
+            self.response_cache.pop(state_hash, None)
+            return None
+        # valid
+        entry['hits'] += 1
+        self.cache_hits += 1
+        resp = entry['response']
+        # set local cooldown after use
+        entry['local_cd'] = self.key_local_cooldown_steps
+        return resp
     
     def reset_budget(self, new_budget: Optional[int] = None):
         """Reset budget for new training period"""

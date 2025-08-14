@@ -5,12 +5,12 @@ from typing import Optional
 @dataclass
 class LLMConfig:
     enabled: bool = False
-    budget_total: int = 200
+    budget_total: int = 500
     cooldown_steps: int = 200
     success_cooldown_steps: int = 500
     novelty_threshold: float = 0.1
-    td_error_threshold: float = 0.2
-    plateau_frames: int = 1000
+    td_error_threshold: float = 0.1
+    plateau_frames: int = 300
     temperature_estimation_samples: int = 100
 
 
@@ -26,12 +26,21 @@ class LoReConfig:
     uncertainty_threshold: float = 0.4
     use_value_ensemble: bool = False
     use_priornet: bool = False
-    mix_in_imagination: bool = False
+    mix_in_imagination: bool = False  # 本番はまずFalseで安定化
+    # 想像空間でのLoRe混合の安全上限
+    beta_imagine_max: float = 0.1
+    # KL制約の段階適用（学習アップデート数で切替）
+    kl_phase_switch_updates: int = 10000
+    use_prox_kl: bool = True
+    use_base_kl: bool = True
+    # LLMロジット整流
+    llm_center_logits: bool = True
+    llm_temperature: float = 2.0
 
 
 @dataclass
 class LogConfig:
-    metrics_interval: int = 500
+    metrics_interval: int = 250
     save_interval: int = 2000
     health_check_interval: int = 2000
     health_warmup_steps: int = 2000
@@ -54,18 +63,18 @@ class TrainConfig:
     batch_size: int = 32
     learning_rate: float = 1e-4
     gamma: float = 0.99
-    entropy_coef: float = 0.02
+    entropy_coef: float = 0.08
     # Exploration schedule
     epsilon_start: float = 0.3
-    epsilon_end: float = 0.05
-    epsilon_anneal_steps: int = 10_000
+    epsilon_end: float = 0.20
+    epsilon_anneal_steps: int = 20_000
     # Softmax temperature schedule (for sampling)
     tau_start: float = 1.2
-    tau_end: float = 1.0
+    tau_end: float = 1.4
     tau_anneal_steps: int = 5_000
     # Actor warmup schedule
-    actor_warmup_steps: int = 2_000
-    actor_anneal_steps: int = 2_000
+    actor_warmup_steps: int = 8_000
+    actor_anneal_steps: int = 8_000
     # Replay / sequence training
     replay_capacity: int = 100_000
     seq_len: int = 16
@@ -78,6 +87,19 @@ class TrainConfig:
     eval_interval: int = 2000
     eval_episodes: int = 5
     eval_seed: int = 0
+    # Prefill before training (alias of warmup for clarity in logs)
+    min_prefill_steps: int = 1000
+    # Reward shaping (disabled to keep env return pure)
+    shaping_enabled: bool = False
+    shaping_key_bonus: float = 0.0
+    shaping_door_bonus: float = 0.0
+    shaping_invalid_penalty: float = 0.0
+    shaping_stationary_penalty: float = 0.0
+    shaping_stationary_N: int = 10
+    shaping_use_potential: bool = False
+    shaping_potential_cap: float = 0.0
+    # valid限定ノイズ（εの一様混合は有効アクションに限定）
+    valid_only_noise: bool = True
 
 
 @dataclass
@@ -87,6 +109,11 @@ class ModelConfig:
     llm_features_dim: int = 0
     # Synthetic/BC (kept for compatibility in agent)
     lambda_bc: float = 0.1
+    # Entropy target for Lagrange control
+    entropy_target: float = 1.4
+    # Actor warmup/anneal settings (read by agent)
+    actor_warmup_steps: int = 8000
+    actor_anneal_steps: int = 8000
 
 
 @dataclass

@@ -21,7 +21,9 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="DreamerV3 + MiniGrid")
     p.add_argument("--env_id", type=str, default=None)
     p.add_argument("--device", type=str, default=None)
+    # Accept --total_steps and alias --total_frames for compatibility
     p.add_argument("--total_steps", type=int, default=None)
+    p.add_argument("--total_frames", type=int, default=None)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--ckpt", type=str, default=None)
     return p.parse_args()
@@ -52,8 +54,11 @@ def main() -> Optional[int]:
         cfg.env.id = args.env_id
     if args.device:
         cfg.train.device = args.device
-    if args.total_steps is not None:
+    # Resolve total_steps from either flag
+    if getattr(args, 'total_steps', None) is not None:
         cfg.train.total_steps = args.total_steps
+    elif getattr(args, 'total_frames', None) is not None:
+        cfg.train.total_steps = args.total_frames
     if args.seed is not None:
         cfg.train.seed = args.seed
 
@@ -77,6 +82,9 @@ def main() -> Optional[int]:
     action_counts = np.zeros(n_actions, dtype=int)
     recent_prob_max: list[float] = []
     recent_entropy: list[float] = []
+    recent_wm_entropy: list[float] = []
+    # 行動由来カウント
+    act_source_counts = {"wm": 0, "llm": 0, "random": 0}
     # Minigrid-specific skill stats
     skill_stats = {
         'steps': 0,
@@ -161,8 +169,27 @@ def main() -> Optional[int]:
     
     # Initialize replay buffer
     obs_shape = (1 if cfg.env.grayscale else 3, cfg.env.image_size, cfg.env.image_size)
-    replay = ReplayBuffer(capacity=cfg.train.replay_capacity, obs_shape=obs_shape)
+    replay = ReplayBuffer(capacity=cfg.train.replay_capacity, obs_shape=obs_shape, n_actions=n_actions)
+    # Update counters
+    num_updates_total = 0
+    updates_in_window = 0
+    
+    # 動的チューニング用の状態
+    dynamic_eps_min = 0.0  # 探索の動的下限
+    
+    # 直近の actor パラメータを保持して Δθ を測る
+    def _flatten_actor_params() -> torch.Tensor:
+        with torch.no_grad():
+            vecs = [p.detach().reshape(-1).cpu() for p in agent.ac.actor.parameters() if p is not None]
+            if len(vecs) == 0:
+                return torch.zeros(1)
+            return torch.cat(vecs, dim=0)
+    prev_actor_params = _flatten_actor_params()
+    delta_actor_norm = 0.0
 
+    # Episode-level shaping accumulator (safety budget)
+    shaping_sum_ep = 0.0
+    
     for step in range(1, total_steps + 1):
         obs_t = preprocess_obs(obs, cfg.env.image_size, cfg.env.grayscale).to(device)
         
@@ -191,13 +218,17 @@ def main() -> Optional[int]:
                 _, _, reward_pred = agent.world(obs_t.unsqueeze(1))
                 td_error = abs(float(reward_pred.squeeze()) - episode_return / max(step, 1))
             
+            # β estimateはリクエスト判定から外す（誤って常時skipしないように）
+            beta_est = None
+
             llm_response = llm_controller.request(
                 obs_np=obs,
                 context=context,
                 reward=episode_return,
                 done=False,  # Updated after step
                 td_error=td_error,
-                step=step
+                step=step,
+                beta_est=beta_est,
             )
         
         # Get action from agent with real-environment LLM prior mixing
@@ -227,38 +258,205 @@ def main() -> Optional[int]:
             # diagnostics
             prob_max_t = float(probs.max(dim=-1).values.item())
             entropy_t = float(-(probs * torch.log(probs.clamp_min(1e-8))).sum(dim=-1).item())
+            # expose wm vs mix entropy for sanity
+            wm_probs = torch.softmax(logits_wm / max(tau, 1e-6), dim=-1)
+            wm_entropy_t = float(-(wm_probs * torch.log(wm_probs.clamp_min(1e-8))).sum(dim=-1).item())
             argmax_wm = int(torch.argmax(logits_wm, dim=-1).item())
             argmax_mix = int(torch.argmax(logits_mix, dim=-1).item())
             # Epsilon annealing
             t_eps = min(1.0, step / max(1, cfg.train.epsilon_anneal_steps))
             eps = (1 - t_eps) * cfg.train.epsilon_start + t_eps * cfg.train.epsilon_end
+            # 動的 ε 底を適用（崩壊・無効行動多発時の救済）
+            if dynamic_eps_min > 0.0:
+                eps = max(eps, dynamic_eps_min)
+            used_random = False
             if eps > 0:
-                uniform = torch.ones_like(probs) / probs.size(-1)
-                probs = (1 - eps) * probs + eps * uniform
-            action = torch.multinomial(probs, num_samples=1)
+                # valid限定ノイズ: maskがあれば有効アクションに限定した一様分布を混入
+                if torch.rand(1).item() < eps:
+                    used_random = True
+                    # 構造状態から合法アクション数を取得（なければ全アクション）
+                    legal = None
+                    try:
+                        if isinstance(prev_struct, dict) and 'legal_actions' in prev_struct:
+                            legal = prev_struct['legal_actions']
+                    except Exception:
+                        legal = None
+                    if legal and isinstance(legal, list) and len(legal) == probs.size(-1):
+                        legal_idx = torch.tensor([1 if x else 0 for x in legal], device=probs.device, dtype=probs.dtype)
+                        legal_idx = (legal_idx > 0.5)
+                        if legal_idx.any():
+                            uni = torch.zeros_like(probs)
+                            uni[0, legal_idx] = 1.0 / float(legal_idx.sum().item())
+                        else:
+                            uni = torch.full_like(probs, 1.0 / probs.size(-1))
+                    else:
+                        uni = torch.full_like(probs, 1.0 / probs.size(-1))
+                    mixed = (1.0 - eps) * probs + eps * uni
+                    mixed = mixed / mixed.sum(dim=-1, keepdim=True)
+                    action = torch.multinomial(mixed, num_samples=1)
+                else:
+                    action = torch.multinomial(probs, num_samples=1)
+            else:
+                action = torch.multinomial(probs, num_samples=1)
             sampled = int(action.item())
             # expose instantaneous policy stats for aggregator
             metrics_instant = {
                 'policy/entropy_inst': float(entropy_t),
+                'policy/entropy_wm_inst': float(wm_entropy_t),
                 'policy/prob_max_inst': float(prob_max_t),
+                'policy/beta_inst': float(beta.mean().item()) if 'beta' in locals() else 0.0,
             }
         action_np = int(action.item())
         # update diagnostics
         action_counts[action_np] += 1
         recent_prob_max.append(prob_max_t)
         recent_entropy.append(entropy_t)
+        recent_wm_entropy.append(wm_entropy_t)
         if len(recent_prob_max) > 200:
             recent_prob_max.pop(0)
         if len(recent_entropy) > 200:
             recent_entropy.pop(0)
+        if len(recent_wm_entropy) > 200:
+            recent_wm_entropy.pop(0)
+        
+        # 行動の由来をカウント
+        if used_random:
+            act_source_counts['random'] += 1
+        elif (llm_controller and llm_response is not None and 'beta' in locals() and float(beta.mean().item()) > 1e-6):
+            act_source_counts['llm'] += 1
+        else:
+            act_source_counts['wm'] += 1
         
         # Environment step
         next_obs, reward, terminated, truncated, info = env.step(action_np)
+        env_reward_raw = float(reward)
+        # Reward shaping (event-based + optional penalties)
+        if getattr(cfg.train, 'shaping_enabled', True):
+            # Time decay encouraging faster solve
+            try:
+                max_steps = int(info.get('max_steps', 100)) if isinstance(info, dict) else 100
+            except Exception:
+                max_steps = 100
+            time_decay = 1.0 - 0.9 * (skill_stats['steps'] / max(1, max_steps))
+            raw_shaping = 0.0
+            # Detect events using structured state before/after
+            prev_has_key = prev_struct.get('has_key', False) if isinstance(prev_struct, dict) else False
+            curr_has_key = False
+            if isinstance(next_obs, np.ndarray):
+                curr_struct_tmp = extract_structured_state(env)
+                curr_has_key = curr_struct_tmp.get('has_key', False) if isinstance(curr_struct_tmp, dict) else False
+            else:
+                curr_struct_tmp = extract_structured_state(env)
+                curr_has_key = curr_struct_tmp.get('has_key', False) if isinstance(curr_struct_tmp, dict) else False
+            # one-time flags
+            if 'shp_got_key' not in locals():
+                shp_got_key = False
+            if 'shp_passed_door' not in locals():
+                shp_passed_door = False
+            # key pickup once
+            if (not shp_got_key) and (not prev_has_key) and curr_has_key:
+                raw_shaping += getattr(cfg.train, 'shaping_key_bonus', 0.05) * time_decay
+                shp_got_key = True
+            # door pass/open detection via door state change
+            def _door_state(s):
+                d = s.get('door') if isinstance(s, dict) else None
+                return d.get('state') if isinstance(d, dict) else None
+            prev_state = _door_state(prev_struct)
+            curr_state = _door_state(curr_struct_tmp)
+            if (not shp_passed_door) and (prev_state is not None and curr_state is not None):
+                if prev_state in ('locked', 'closed') and curr_state == 'open':
+                    raw_shaping += getattr(cfg.train, 'shaping_door_bonus', 0.10) * time_decay
+                    shp_passed_door = True
+            # penalties
+            if getattr(cfg.train, 'shaping_invalid_penalty', 0.001) > 0.0:
+                # reuse invalid heuristic computed below after we know states; fallback simple check
+                pass  # applied after invalid detection block
+            # stationary penalty (simple pose repeat counter)
+            if 'stationary_counter' not in locals():
+                stationary_counter = 0
+            def _agent_pose(s):
+                a = s.get('agent') if isinstance(s, dict) else None
+                pos = tuple(a.get('pos')) if (isinstance(a, dict) and a.get('pos') is not None) else None
+                dirc = a.get('dir') if isinstance(a, dict) else None
+                return (pos, dirc)
+            prev_pose = _agent_pose(prev_struct)
+            curr_pose = _agent_pose(curr_struct_tmp)
+            if prev_pose == curr_pose:
+                stationary_counter += 1
+            else:
+                stationary_counter = 0
+            if stationary_counter >= getattr(cfg.train, 'shaping_stationary_N', 10):
+                raw_shaping -= getattr(cfg.train, 'shaping_stationary_penalty', 0.001)
+                stationary_counter = 0
+            # Per-step clamp and per-episode budget to avoid domination
+            per_step_cap = float(getattr(cfg.train, 'shaping_potential_cap', 0.01))
+            raw_shaping = float(max(-per_step_cap, min(per_step_cap * 2.0, raw_shaping)))
+            # Episode budgets
+            ep_neg_budget = -0.10
+            ep_pos_budget = +0.20
+            allowed_low = ep_neg_budget - shaping_sum_ep
+            allowed_high = ep_pos_budget - shaping_sum_ep
+            shaping_add = max(allowed_low, min(allowed_high, raw_shaping))
+            shaping_sum_ep += shaping_add
+            reward = float(reward) + float(shaping_add)
+
+            # Apply invalid-action penalty BEFORE logging/replay to keep consistency
+            try:
+                # Helper to get agent position from structured state
+                def _agent_pos(s):
+                    a = s.get('agent') if isinstance(s, dict) else None
+                    return tuple(a.get('pos')) if (isinstance(a, dict) and a.get('pos') is not None) else None
+
+                prev_pos_pen = _agent_pos(prev_struct)
+                curr_pos_pen = _agent_pos(curr_struct_tmp)
+
+                invalid_tmp = False
+                # forward into wall (no movement)
+                if action_np == 2 and prev_pos_pen is not None and curr_pos_pen is not None and prev_pos_pen == curr_pos_pen:
+                    invalid_tmp = True
+                # pickup but no key obtained
+                if action_np == 3 and not ((not prev_has_key) and curr_struct_tmp.get('has_key', False)):
+                    invalid_tmp = True
+                # toggle but door state did not change
+                if action_np == 5 and not (prev_state is not None and curr_state is not None and prev_state != curr_state):
+                    invalid_tmp = True
+                # drop without key
+                if action_np == 4 and not prev_has_key:
+                    invalid_tmp = True
+
+                if invalid_tmp and getattr(cfg.train, 'shaping_invalid_penalty', 0.001) > 0.0:
+                    pen = float(getattr(cfg.train, 'shaping_invalid_penalty', 0.001))
+                    # respect per-episode negative budget
+                    ep_neg_budget = -0.10
+                    allowed_low = ep_neg_budget - shaping_sum_ep
+                    pen_apply = min(pen, max(0.0, -allowed_low)) if allowed_low < 0 else 0.0
+                    reward = float(reward) - pen_apply
+                    shaping_sum_ep -= pen_apply
+            except Exception:
+                pass
         done = terminated or truncated
+        # Robust success detection (use raw env reward and symbolic check)
+        try:
+            did_succeed = bool(done and (
+                (env_reward_raw > 0.0) or (
+                    isinstance(curr_struct_tmp, dict)
+                    and isinstance(curr_struct_tmp.get('agent'), dict)
+                    and isinstance(curr_struct_tmp.get('goal'), dict)
+                    and curr_struct_tmp.get('agent', {}).get('pos') is not None
+                    and curr_struct_tmp.get('goal', {}).get('pos') is not None
+                    and tuple(curr_struct_tmp['agent']['pos']) == tuple(curr_struct_tmp['goal']['pos'])
+                )
+            ))
+        except Exception:
+            did_succeed = bool(done and (env_reward_raw > 0.0))
         
-        # Update success tracking for LLM controller
-        if llm_controller and done and reward > 0:
-            llm_controller.last_success_step = step
+        # Update success/plateau/uplift tracking for LLM controller
+        if llm_controller:
+            llm_controller.record_reward(step, float(reward), bool(done))
+            # クールダウン延長は実際にLLMを使用した成功時のみ
+            if done and reward > 0 and (llm_response is not None):
+                llm_controller.last_success_step = step
+                llm_controller.notify_success(step)
 
         # Prepare training batch with LLM data
         observation = obs_t  # [1,C,H,W]
@@ -276,9 +474,24 @@ def main() -> Optional[int]:
         )
 
         # Write to replay with success tag
+        # Also store LLM priors in replay if available
+        llm_logits_np = None
+        llm_mask_np = None
+        if llm_response is not None and hasattr(llm_response, 'policy') and llm_response.policy:
+            try:
+                logits_list = llm_response.policy.get('logits', [])
+                if isinstance(logits_list, list) and len(logits_list) == n_actions:
+                    llm_logits_np = np.asarray(logits_list, dtype=np.float32)
+                mask_list = getattr(llm_response, 'mask', None)
+                if isinstance(mask_list, list) and len(mask_list) == n_actions:
+                    llm_mask_np = np.asarray(mask_list, dtype=np.float32)
+            except Exception:
+                llm_logits_np = None
+                llm_mask_np = None
         replay.add(
             observation.squeeze(0).cpu().numpy(), action_np, float(reward), bool(done),
-            next_obs_t.squeeze(0).cpu().numpy(), success=bool(done and reward > 0)
+            next_obs_t.squeeze(0).cpu().numpy(), success=bool(did_succeed),
+            llm_logits=llm_logits_np, llm_mask=llm_mask_np
         )
 
         # Minigrid skill metrics update
@@ -380,10 +593,14 @@ def main() -> Optional[int]:
         metrics = {"loss/policy": 0.0, "value/mean": 0.0, "policy/entropy": 0.0}
 
         # Warmup then train from replay with sequences
-        if step >= cfg.train.warmup_steps:
+        # Prefer min_prefill_steps if provided
+        train_started_flag = (step >= getattr(cfg.train, 'min_prefill_steps', cfg.train.warmup_steps))
+        if train_started_flag:
             for _ in range(getattr(cfg.train, 'updates_per_step', 1)):
                 batch_seq = replay.sample_sequences(cfg.train.batch_size, cfg.train.seq_len, device)
                 metrics = agent.update_sequence(batch_seq)
+                num_updates_total += 1
+                updates_in_window += 1
         
         # Add episode/success metrics for health monitoring
         success_rate = episode_success / max(episode_count, 1) if episode_count > 0 else 0.0
@@ -426,25 +643,70 @@ def main() -> Optional[int]:
         # Episode end handling
         if done:
             episode_count += 1
-            if reward > 0:
+            if did_succeed:
                 episode_success += 1
             
             success_rate = episode_success / episode_count if episode_count > 0 else 0.0
             print(f"step={step} episode={episode_count} return={episode_return:.2f} success_rate={success_rate:.3f}")
-            aggregator.record_episode(step, episode_return, info.get('episode_length', 0) if isinstance(info, dict) else 0, success=(reward > 0))
+            aggregator.record_episode(step, episode_return, info.get('episode_length', 0) if isinstance(info, dict) else 0, success=bool(did_succeed))
+            # Reset shaping episode flags
+            try:
+                shp_got_key = False
+                shp_passed_door = False
+                stationary_counter = 0
+            except Exception:
+                pass
             
             obs, info = env.reset()
             episode_return = 0.0
         
         # Periodic logging and health dashboard
         if step % cfg.log.metrics_interval == 0 or step == total_steps:
+            # Δθ（actor）のノルムを測る
+            curr_actor_params = _flatten_actor_params()
+            try:
+                delta_actor_norm = float(torch.norm(curr_actor_params - prev_actor_params).item())
+            except Exception:
+                delta_actor_norm = 0.0
+            prev_actor_params = curr_actor_params
+            
+            # 動的チューニング（崩壊抑制・探索強化・LR抑制）
+            try:
+                # 直近統計
+                ent_mean = float(np.mean(recent_entropy)) if recent_entropy else 0.0
+                prob_mean = float(np.mean(recent_prob_max)) if recent_prob_max else 0.0
+                invalid_ratio = (skill_stats['invalid'] / max(1, skill_stats['steps']))
+                # エントロピー目標帯 0.8–1.6 近辺を目指す単純PI風調整
+                if train_started_flag and updates_in_window > 0:
+                    # 低Hの早期介入を強化
+                    if ent_mean < 0.6:
+                        agent.entropy_coef = float(min(0.12, agent.entropy_coef * 1.2))
+                    elif ent_mean > 1.7:
+                        agent.entropy_coef = float(max(0.005, agent.entropy_coef * 0.9))
+                    # 無効行動が多い時は探索底上げ、少ない時は徐々に解除
+                    if invalid_ratio > 0.50:
+                        dynamic_eps_min = float(min(0.10, dynamic_eps_min + 0.05))
+                    elif invalid_ratio < 0.30 and dynamic_eps_min > 0.0:
+                        dynamic_eps_min = float(max(0.0, dynamic_eps_min - 0.02))
+                    # 極端な崩壊（prob_max高・低エントロピー）では学習率を半減し温度を少し上げる
+                    if prob_mean > 0.85 and ent_mean < 0.60:
+                        for g in agent.opt.param_groups:
+                            g['lr'] = float(max(1e-5, g.get('lr', 1e-4) * 0.5))
+                        cfg.train.tau_end = float(min(1.5, getattr(cfg.train, 'tau_end', 1.0) + 0.05))
+            except Exception:
+                pass
             log_enhanced_metrics(step, metrics_buffer, llm_controller, episode_count, episode_success,
                                  extra_diag={
                                      'prob_max_mean': float(np.mean(recent_prob_max)) if recent_prob_max else 0.0,
                                      'prob_max_std': float(np.std(recent_prob_max)) if recent_prob_max else 0.0,
-                                     'entropy_mean': float(np.mean(recent_entropy)) if recent_entropy else 0.0,
-                                     'entropy_std': float(np.std(recent_entropy)) if recent_entropy else 0.0,
+                                      'entropy_mean': float(np.mean(recent_entropy)) if recent_entropy else 0.0,
+                                      'entropy_std': float(np.std(recent_entropy)) if recent_entropy else 0.0,
+                                      'entropy_wm_mean': float(np.mean(recent_wm_entropy)) if recent_wm_entropy else 0.0,
+                                      'entropy_wm_std': float(np.std(recent_wm_entropy)) if recent_wm_entropy else 0.0,
                                      'action_hist': action_counts.tolist(),
+                                      'act_src_wm': int(act_source_counts['wm']),
+                                      'act_src_llm': int(act_source_counts['llm']),
+                                      'act_src_random': int(act_source_counts['random']),
                                      # skill metrics (rates over all steps so far)
                                      'pickup_key_rate': (skill_stats['pickups'] / max(1, skill_stats['steps'])),
                                      'door_toggle_rate': (skill_stats['toggles'] / max(1, skill_stats['steps'])),
@@ -454,8 +716,18 @@ def main() -> Optional[int]:
                                      'dist_med_ag_key': (float(np.median(skill_stats['dist_ag_key'])) if skill_stats['dist_ag_key'] else -1.0),
                                      'dist_med_key_door': (float(np.median(skill_stats['dist_key_door'])) if skill_stats['dist_key_door'] else -1.0),
                                      'dist_med_door_goal': (float(np.median(skill_stats['dist_door_goal'])) if skill_stats['dist_door_goal'] else -1.0),
+                                     # updates
+                                     'updates_last_interval': int(updates_in_window),
+                                     'updates_total': int(num_updates_total),
+                                     'train_started': bool(train_started_flag),
+                                      'delta_actor_norm': float(delta_actor_norm),
+                                       # dynamic tuning diagnostics
+                                       'entropy_coef': float(agent.entropy_coef),
+                                       'eps_min_dyn': float(dynamic_eps_min),
+                                       'lr0_current': float(agent.opt.param_groups[0].get('lr', 0.0)) if hasattr(agent, 'opt') else 0.0,
                                  })
             metrics_buffer = []
+            updates_in_window = 0
             last_log_time = time.time()
             
             # Show health dashboard every 500 steps
@@ -634,7 +906,7 @@ def log_enhanced_metrics(step: int, metrics_buffer: list, llm_controller, episod
     # Basic training metrics + world model diagnostics
     line = (f"[{step:6d}] Loss: {avg_metrics.get('loss/policy', 0):.4f} "
             f"Value: {avg_metrics.get('value/mean', 0):.3f} "
-            f"Entropy: {avg_metrics.get('policy/entropy', 0):.3f} "
+            f"Entropy(train): {avg_metrics.get('policy/entropy', 0):.5f} "
             f"| world_psnr={avg_metrics.get('world/psnr_db', 0):.2f}dB "
             f"recon_mse={avg_metrics.get('world/recon_mse', 0):.4f} "
             f"reward_mae={avg_metrics.get('reward/mae', 0):.4f} "
@@ -642,10 +914,14 @@ def log_enhanced_metrics(step: int, metrics_buffer: list, llm_controller, episod
             f"rew_ev={avg_metrics.get('reward/explained_variance', 0):.3f}")
     if extra_diag:
         line += (f" | prob_max(mean±std)={extra_diag.get('prob_max_mean',0):.3f}±{extra_diag.get('prob_max_std',0):.3f}"
-                 f" entropy(mean±std)={extra_diag.get('entropy_mean',0):.3f}±{extra_diag.get('entropy_std',0):.3f}"
+                 f" entropy_mix(mean±std)={extra_diag.get('entropy_mean',0):.5f}±{extra_diag.get('entropy_std',0):.5f}"
+                 f" entropy_wm(mean±std)={extra_diag.get('entropy_wm_mean',0):.5f}±{extra_diag.get('entropy_wm_std',0):.5f}"
                  f" | pickup={extra_diag.get('pickup_key_rate',0):.3f} toggle={extra_diag.get('door_toggle_rate',0):.3f}"
                  f" unlockOpen={extra_diag.get('door_unlock_open_rate',0):.3f} hasKey={extra_diag.get('has_key_ratio',0):.3f} invalid={extra_diag.get('invalid_action_ratio',0):.3f}"
-                 f" | d_ag->key={extra_diag.get('dist_med_ag_key',-1):.1f} d_key->door={extra_diag.get('dist_med_key_door',-1):.1f} d_door->goal={extra_diag.get('dist_med_door_goal',-1):.1f}")
+                 f" | d_ag->key={extra_diag.get('dist_med_ag_key',-1):.1f} d_key->door={extra_diag.get('dist_med_key_door',-1):.1f} d_door->goal={extra_diag.get('dist_med_door_goal',-1):.1f}"
+                 f" | updates={extra_diag.get('updates_last_interval',0)} total={extra_diag.get('updates_total',0)} train_started={extra_diag.get('train_started',False)}"
+                 f" | grad_actor={avg_metrics.get('optim/grad_actor_norm',0):.3e} grad_critic={avg_metrics.get('optim/grad_critic_norm',0):.3e} Δθ_actor={extra_diag.get('delta_actor_norm',0.0):.3e}"
+                 f" | src[wm,llm,rand]={[extra_diag.get('act_src_wm',0), extra_diag.get('act_src_llm',0), extra_diag.get('act_src_random',0)]}")
     print(line)
     
     # LLM controller metrics
@@ -661,12 +937,20 @@ def log_enhanced_metrics(step: int, metrics_buffer: list, llm_controller, episod
     
     # Success metrics
     success_rate = episode_success / max(episode_count, 1)
+    # Greedy evaluation proxy (only prints the sampled SR here; full eval routine is optional)
+    sr_greedy = avg_metrics.get('eval/sr_greedy', None)
     if extra_diag and 'action_hist' in extra_diag:
         hist = extra_diag['action_hist']
         hist_str = ", ".join(str(v) for v in hist)
-        print(f"[{step:6d}] Episodes: {episode_count} Success rate: {success_rate:.3f} | action_hist: [{hist_str}]")
+        if sr_greedy is not None:
+            print(f"[{step:6d}] Episodes: {episode_count} Success rate: {success_rate:.3f} SR_greedy: {sr_greedy:.3f} | action_hist: [{hist_str}]")
+        else:
+            print(f"[{step:6d}] Episodes: {episode_count} Success rate: {success_rate:.3f} | action_hist: [{hist_str}]")
     else:
-        print(f"[{step:6d}] Episodes: {episode_count} Success rate: {success_rate:.3f}")
+        if sr_greedy is not None:
+            print(f"[{step:6d}] Episodes: {episode_count} Success rate: {success_rate:.3f} SR_greedy: {sr_greedy:.3f}")
+        else:
+            print(f"[{step:6d}] Episodes: {episode_count} Success rate: {success_rate:.3f}")
 
 
 def _make_batch(observation: torch.Tensor, action: int, reward: float, done: bool, next_observation: torch.Tensor):

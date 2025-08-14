@@ -57,7 +57,8 @@ class ConvDecoder(nn.Module):
         x = self.fc(h)
         x = x.view(-1, 64, 4, 4)
         x = self.deconv(x)
-        return x
+        # Ensure output is in [0,1] to match input scaling
+        return torch.sigmoid(x)
 
 
 class WorldModel(nn.Module):
@@ -231,6 +232,16 @@ class ActorCritic(nn.Module):
         if llm_logits.shape == logits_wm.shape:
             # Critical: stopgrad on LLM logits to prevent gradient flow
             llm_logits_sg = llm_logits.detach()
+            # 整流（中心化・温度）：本番運用の安定化
+            try:
+                agent_ref = getattr(self, '_agent_ref', None)
+                lore_cfg = getattr(agent_ref, 'lore_cfg', None) if agent_ref is not None else None
+                if lore_cfg is not None and getattr(lore_cfg, 'llm_center_logits', True):
+                    llm_logits_sg = llm_logits_sg - llm_logits_sg.mean(dim=-1, keepdim=True)
+                T_llm = float(getattr(lore_cfg, 'llm_temperature', 2.0)) if lore_cfg is not None else 2.0
+                llm_logits_sg = llm_logits_sg / max(T_llm, 1e-6)
+            except Exception:
+                pass
             
             # Apply β gating with broadcasting
             if beta.dim() == 1 and logits_wm.dim() == 2:
@@ -242,7 +253,7 @@ class ActorCritic(nn.Module):
         else:
             logits_mix = logits_wm  # Fallback if shapes don't match
         
-        # Action masking (applied after mixing)
+        # Action masking (applied after mixing) and also ensure LLM side respects mask
         if llm_mask is not None:
             if llm_mask.shape == logits_mix.shape:
                 mask_penalty = torch.where(llm_mask == 0, -1e9, 0.0)
@@ -303,6 +314,24 @@ class DreamerV3Agent:
         self.lambda_bc: float = getattr(model_cfg, "lambda_bc", 0.1)  # BC regularization for synthetic data
         self.entropy_coef = float(entropy_coef)
         self.epsilon_greedy = float(epsilon_greedy)
+        
+        # Stabilizers and dynamic regularization defaults
+        self.grad_clip_actor_max: float = float(getattr(model_cfg, "grad_clip_actor", 1.0))
+        self.logit_clamp_value: float = float(getattr(model_cfg, "logit_clamp", 8.0))
+        self.logit_l2_coef: float = float(getattr(model_cfg, "logit_l2", 1e-4))
+        # Entropy Lagrange control toward target band
+        self.entropy_target: float = float(getattr(model_cfg, "entropy_target", 1.2))
+        self.entropy_lambda: float = 0.0
+        self.entropy_lambda_lr: float = float(getattr(model_cfg, "entropy_lambda_lr", 1e-2))
+        self.entropy_lambda_max: float = float(getattr(model_cfg, "entropy_lambda_max", 0.2))
+
+        # Proximal KL regularization params (EMA actor is built after self.ac is created)
+        self.actor_ema = None  # type: ignore
+        self.ema_tau: float = float(getattr(model_cfg, "policy_ema_tau", 0.99))
+        self.delta_pi_target: float = float(getattr(model_cfg, "policy_delta_target", 0.03))
+        self.lambda_pi: float = 0.0
+        self.kl_pi_lr: float = float(getattr(model_cfg, "policy_kl_lr", 1e-2))
+        self.lambda_pi_max: float = 1.0
 
         # Infer discrete action dim
         n_actions: Optional[int] = None
@@ -329,6 +358,17 @@ class DreamerV3Agent:
         
         # Set agent reference for uncertainty gate access
         self.ac._agent_ref = self
+
+        # Build EMA copy of actor now that self.ac exists
+        try:
+            import copy as _copy
+            self.actor_ema = _copy.deepcopy(self.ac.actor)
+            for p in self.actor_ema.parameters():
+                p.requires_grad_(False)
+            # Move EMA to the same device
+            self.actor_ema.to(device)
+        except Exception:
+            self.actor_ema = None  # type: ignore
         
         # Enhanced LLM integration with uncertainty gating (LoRe specification)
         from ..conf import LoReConfig
@@ -413,6 +453,9 @@ class DreamerV3Agent:
         except Exception:
             self._amp_enabled = False
             self._scaler = None  # type: ignore
+
+        # Learner-side updateカウンタ（actor warmup用）
+        self.learn_updates: int = 0
 
     def to(self, device: torch.device) -> None:
         """Move all components to device with verification."""
@@ -623,6 +666,8 @@ class DreamerV3Agent:
             uncertainty = None
             beta_values = None
 
+        # Clamp logits to avoid pathological saturation
+        logits = torch.clamp(logits, -self.logit_clamp_value, self.logit_clamp_value)
         logp = F.log_softmax(logits, dim=-1)
         logp_act = logp.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
 
@@ -661,18 +706,56 @@ class DreamerV3Agent:
                 kl_divergence = torch.distributions.kl.kl_divergence(pi_mixed, pi_base)
                 kl_mean = kl_divergence.mean()
                 
-                # Update uncertainty gate's KL constraint
-                self.uncertainty_gate.update_kl_constraint(kl_mean)
+                # KL段階適用: 近傍KL優先期 or 基準方策KL期
+                use_prox = bool(getattr(self.lore_cfg, 'use_prox_kl', True))
+                use_base = bool(getattr(self.lore_cfg, 'use_base_kl', True))
+                phase_sw = int(getattr(self.lore_cfg, 'kl_phase_switch_updates', 10000))
+                curr_updates = int(getattr(self, 'learn_updates', 0))
+                if curr_updates < phase_sw:
+                    # 前半: 近傍KLのみ強め（基準KLのλ更新は抑制）
+                    pass  # kl_meanは下でλ_baseへ適用せず控えめに扱う
+                else:
+                    # 後半: 基準方策KLへシフト
+                    if use_base:
+                        self.uncertainty_gate.update_kl_constraint(kl_mean)
                 
                 # Compute KL penalty using Lagrange multiplier
-                kl_penalty_coeff = self.uncertainty_gate.get_kl_penalty_coeff()
-                kl_penalty = kl_penalty_coeff * torch.relu(kl_mean - self.uncertainty_gate.delta_target)
+                kl_penalty = torch.tensor(0.0, device=obs.device)
+                if curr_updates >= phase_sw and use_base:
+                    kl_penalty_coeff = self.uncertainty_gate.get_kl_penalty_coeff()
+                    kl_penalty = kl_penalty_coeff * torch.relu(kl_mean - self.uncertainty_gate.delta_target)
                 
             except Exception:
                 kl_divergence = torch.tensor(0.0, device=obs.device)
                 kl_penalty = torch.tensor(0.0, device=obs.device)
 
-        entropy = -(logp * torch.exp(logp)).sum(-1).mean()
+        entropy_vec = -(logp * torch.exp(logp)).sum(-1)
+        entropy = entropy_vec.mean()
+
+        # Proximal KL to EMA policy to prevent rapid peaking
+        try:
+            # Rebuild actor input to evaluate EMA policy
+            actor_input = h
+            if getattr(self.ac, 'feature_proj', None) is not None and self.use_llm_features:
+                if llm_features is not None:
+                    llm_feat_norm = self.ac.feature_norm(llm_features)
+                    llm_feat_proj = self.ac.feature_proj(llm_feat_norm)
+                else:
+                    llm_feat_proj = torch.zeros(
+                        h.size(0), self.ac.feature_proj.out_features, device=h.device, dtype=h.dtype
+                    )
+                actor_input = torch.cat([h, llm_feat_proj], dim=-1)
+            if self.actor_ema is None:
+                kl_pi = torch.tensor(0.0, device=obs.device)
+            else:
+                logits_ema = self.actor_ema(actor_input.detach())
+                logits_ema = torch.clamp(logits_ema, -self.logit_clamp_value, self.logit_clamp_value)
+                from torch.distributions import Categorical
+                pi_curr = Categorical(logits=logits.detach())
+                pi_ema = Categorical(logits=logits_ema.detach())
+                kl_pi = torch.distributions.kl.kl_divergence(pi_curr, pi_ema).mean()
+        except Exception:
+            kl_pi = torch.tensor(0.0, device=obs.device)
 
         loss_model = recon_loss + reward_loss
         # Behavioral Cloning regularization for synthetic data (LoRe specification)
@@ -707,7 +790,17 @@ class DreamerV3Agent:
             value_loss = F.mse_loss(values.squeeze(-1), target_v, reduction='none')
             value_loss = (value_loss * per_weights).mean()
         
-        loss_ac = policy_loss + 0.5 * value_loss - self.entropy_coef * entropy + kl_penalty
+        # Entropy Lagrange: encourage H to reach target from below
+        entropy_shortfall = torch.clamp(self.entropy_target - entropy, min=0.0)
+        entropy_lagrange_pen = self.entropy_lambda * entropy_shortfall
+        loss_ac = policy_loss + 0.7 * value_loss - self.entropy_coef * entropy + entropy_lagrange_pen + kl_penalty
+        # Proximal KL penalty (Lagrange)
+        if kl_pi is not None:
+            # 近傍KLは前半を主役、後半はやや弱め
+            phase_sw = int(getattr(self.lore_cfg, 'kl_phase_switch_updates', 10000))
+            curr_updates = int(getattr(self, 'learn_updates', 0))
+            lambda_pi_scale = 1.0 if curr_updates < phase_sw else 0.5
+            loss_ac = loss_ac + lambda_pi_scale * self.lambda_pi * torch.relu(kl_pi - self.delta_pi_target)
         loss = loss_model + loss_ac
 
         fwd_ms = (time.perf_counter() - t_fwd) * 1000.0
@@ -718,11 +811,14 @@ class DreamerV3Agent:
         if self._amp_enabled and getattr(self, "_scaler", None) is not None:
             self._scaler.scale(loss).backward()
             self._scaler.unscale_(self.opt)
+            # Separate actor grad clip for stability
+            torch.nn.utils.clip_grad_norm_(list(self.ac.actor.parameters()), self.grad_clip_actor_max)
             grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 2.0)
             self._scaler.step(self.opt)
             self._scaler.update()
         else:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(list(self.ac.actor.parameters()), self.grad_clip_actor_max)
             grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 2.0)
             self.opt.step()
         bwd_ms = (time.perf_counter() - t_bwd) * 1000.0
@@ -733,6 +829,26 @@ class DreamerV3Agent:
             lr0 = float(self.opt.param_groups[0].get('lr', 0.0))
         except Exception:
             lr0 = 0.0
+
+        # Update entropy Lagrange multiplier (no grad)
+        try:
+            with torch.no_grad():
+                ent_short = float(max(0.0, self.entropy_target - float(entropy.detach().cpu())))
+                self.entropy_lambda = float(min(self.entropy_lambda_max, max(0.0, self.entropy_lambda + self.entropy_lambda_lr * ent_short)))
+        except Exception:
+            pass
+
+        # Update proximal KL Lagrange and EMA actor
+        try:
+            with torch.no_grad():
+                kl_err = float(max(0.0, float(kl_pi.detach().cpu()) - self.delta_pi_target)) if kl_pi is not None else 0.0
+                self.lambda_pi = float(min(self.lambda_pi_max, max(0.0, self.lambda_pi + self.kl_pi_lr * kl_err)))
+                # EMA update
+                if self.actor_ema is not None:
+                    for p_ema, p in zip(self.actor_ema.parameters(), self.ac.actor.parameters()):
+                        p_ema.copy_(self.ema_tau * p_ema + (1.0 - self.ema_tau) * p.detach())
+        except Exception:
+            pass
 
         # Basic stats for monitoring learning signal
         adv_mean = float(advantage.mean().detach().cpu())
@@ -759,6 +875,12 @@ class DreamerV3Agent:
         except Exception:
             world_psnr = 0.0
 
+        # Logit L2 regularization metric
+        try:
+            logit_l2 = self.logit_l2_coef * float(torch.mean(torch.sum(torch.exp(logp) * (logits ** 2), dim=-1)).detach().cpu())
+        except Exception:
+            logit_l2 = 0.0
+
         metrics = {
             "loss/model_recon": float(recon_loss.detach().cpu()),
             "loss/model_reward": float(reward_loss.detach().cpu()),
@@ -781,6 +903,10 @@ class DreamerV3Agent:
             "value/td_std": td_std,
             "value/explained_variance": float(value_ev),
             "world/psnr_db": world_psnr,
+            "regularize/entropy_lambda": float(self.entropy_lambda),
+            "regularize/logit_l2": float(logit_l2),
+            "regularize/kl_pi": float(kl_pi.detach().cpu()) if 'kl_pi' in locals() and isinstance(kl_pi, torch.Tensor) else 0.0,
+            "regularize/lambda_pi": float(self.lambda_pi),
         }
         
         # Add synthetic data metrics if available
@@ -815,6 +941,11 @@ class DreamerV3Agent:
         gate_metrics = self.uncertainty_gate.get_metrics()
         metrics.update(gate_metrics)
         
+        # 学習アップデート数をカウント（actor warmup/anneal に使用）
+        try:
+            self.learn_updates += 1
+        except Exception:
+            self.learn_updates = getattr(self, 'learn_updates', 0) + 1
         return metrics
 
     def update_sequence(self, batch: Dict[str, torch.Tensor]) -> dict:
@@ -871,8 +1002,47 @@ class DreamerV3Agent:
             advantages[:, t] = last_gae
         returns = advantages + values
 
-        # Policy logits per step
-        logits = self.ac.policy_logits(h_flat).view(B, T, -1)
+        # Optionally mix LLM priors during sequence training if available (from replay) and enabled
+        llm_logits_seq = None
+        llm_mask_seq = None
+        if self.mix_in_imagination and "llm_prior_logits_seq" in batch and batch["llm_prior_logits_seq"] is not None:
+            llm_logits_seq = batch["llm_prior_logits_seq"].to(self.device, non_blocking=True)
+            if llm_logits_seq.dim() == 2:
+                llm_logits_seq = llm_logits_seq.unsqueeze(0)
+        if self.mix_in_imagination and "llm_mask_seq" in batch and batch["llm_mask_seq"] is not None:
+            llm_mask_seq = batch["llm_mask_seq"].to(self.device, non_blocking=True)
+            if llm_mask_seq.dim() == 2:
+                llm_mask_seq = llm_mask_seq.unsqueeze(0)
+
+        # Policy logits per step (with optional LLM mixing)
+        if self.mix_in_imagination and llm_logits_seq is not None and llm_logits_seq.shape[:2] == (B, T):
+            # availabilityがあれば、Falseの時はβ=0になるよう llm_logits_t をゼロ中心の無効値に
+            llm_avail_seq = batch.get("llm_available_seq", None)
+            if llm_avail_seq is not None:
+                llm_avail_seq = llm_avail_seq.to(self.device, non_blocking=True).view(B, T)
+            logits_mixed = []
+            for t in range(T):
+                llm_logits_t = llm_logits_seq[:, t]
+                llm_mask_t = llm_mask_seq[:, t] if llm_mask_seq is not None else None
+                # 整流（中心化・温度）とavailability適用
+                if llm_logits_t is not None:
+                    if getattr(self.lore_cfg, 'llm_center_logits', True):
+                        llm_logits_t = llm_logits_t - llm_logits_t.mean(dim=-1, keepdim=True)
+                    T_llm = float(getattr(self.lore_cfg, 'llm_temperature', 2.0))
+                    llm_logits_t = llm_logits_t / max(T_llm, 1e-6)
+                    if llm_mask_t is not None and llm_mask_t.shape == llm_logits_t.shape:
+                        very_neg = torch.tensor(-1e9, device=llm_logits_t.device, dtype=llm_logits_t.dtype)
+                        llm_logits_t = torch.where(llm_mask_t > 0.5, llm_logits_t, very_neg)
+                    if llm_avail_seq is not None:
+                        avail_t = llm_avail_seq[:, t].view(-1, 1)
+                        llm_logits_t = torch.where(avail_t > 0.5, llm_logits_t, torch.zeros_like(llm_logits_t))
+                # βの上限（imagination側）は小さめ
+                logits_t = self.ac.policy_logits(h_seq[:, t], llm_logits=llm_logits_t, llm_mask=llm_mask_t)
+                logits_mixed.append(logits_t)
+            logits = torch.stack(logits_mixed, dim=1)
+        else:
+            logits = self.ac.policy_logits(h_flat).view(B, T, -1)
+        logits = torch.clamp(logits, -self.logit_clamp_value, self.logit_clamp_value)
         logp = F.log_softmax(logits, dim=-1)
         logp_act = logp.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
 
@@ -883,7 +1053,8 @@ class DreamerV3Agent:
         adv = adv.clamp(-5.0, 5.0)
 
         # Actor warmup/anneal to avoid early collapse
-        global_step = float(self.uncertainty_gate.current_step)
+        # LLM無効時でも確実に進行するよう、学習アップデート数でウォームアップを進める
+        global_step = float(getattr(self, 'learn_updates', 0))
         warm = getattr(self, 'actor_warmup_steps', 2000)
         anneal = getattr(self, 'actor_anneal_steps', 2000)
         if global_step < warm:
@@ -897,6 +1068,13 @@ class DreamerV3Agent:
             actor_scale = 1.0
         policy_loss = actor_scale * (-(logp_act * adv).mean())
         value_loss = F.mse_loss(values, returns)
+        # Trust region style shrinkage on advantages to avoid spikes
+        adv_norm = adv
+        if adv_norm.numel() >= 128:
+            adv_norm = (adv_norm - adv_norm.mean()) / adv_norm.std(unbiased=False).clamp_min(1e-6)
+        adv_norm = adv_norm.clamp(-3.0, 3.0)
+        # Recompute policy loss with shrunken adv for safety
+        policy_loss = actor_scale * (-(logp_act * adv_norm).mean())
         entropy = -(torch.exp(logp) * logp).sum(-1).mean()
 
         # World model diagnostics
@@ -921,18 +1099,45 @@ class DreamerV3Agent:
             reward_ev = 0.0
 
         loss_model = recon_loss + reward_loss + 0.5 * dyn_loss
-        loss_ac = policy_loss + 1.0 * value_loss - self.entropy_coef * entropy
+        # Entropy Lagrange penalty for sequence mode
+        entropy_seq = -(torch.exp(logp) * logp).sum(-1).mean()
+        entropy_shortfall = torch.clamp(self.entropy_target - entropy_seq, min=0.0)
+        entropy_lagrange_pen = self.entropy_lambda * entropy_shortfall
+        loss_ac = policy_loss + 0.7 * value_loss - self.entropy_coef * entropy + entropy_lagrange_pen
         loss = loss_model + loss_ac
 
         self.opt.zero_grad(set_to_none=True)
         if self._amp_enabled and getattr(self, "_scaler", None) is not None:
             self._scaler.scale(loss).backward()
             self._scaler.unscale_(self.opt)
+            # grad norms
+            def _group_grad_norm(params) -> float:
+                sq = 0.0
+                for p in params:
+                    if p.grad is None:
+                        continue
+                    g = p.grad.detach()
+                    sq += float(torch.sum(g * g).cpu())
+                return float(sq ** 0.5)
+            torch.nn.utils.clip_grad_norm_(list(self.ac.actor.parameters()), self.grad_clip_actor_max)
+            grad_actor_norm = _group_grad_norm(list(self.ac.actor.parameters()))
+            grad_critic_norm = _group_grad_norm(list(self.ac.critic.parameters()))
             grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 2.0)
             self._scaler.step(self.opt)
             self._scaler.update()
         else:
             loss.backward()
+            def _group_grad_norm(params) -> float:
+                sq = 0.0
+                for p in params:
+                    if p.grad is None:
+                        continue
+                    g = p.grad.detach()
+                    sq += float(torch.sum(g * g).cpu())
+                return float(sq ** 0.5)
+            torch.nn.utils.clip_grad_norm_(list(self.ac.actor.parameters()), self.grad_clip_actor_max)
+            grad_actor_norm = _group_grad_norm(list(self.ac.actor.parameters()))
+            grad_critic_norm = _group_grad_norm(list(self.ac.critic.parameters()))
             grad_global_norm = torch.nn.utils.clip_grad_norm_(self.params, 2.0)
             self.opt.step()
 
@@ -942,6 +1147,11 @@ class DreamerV3Agent:
         except Exception:
             lr0 = 0.0
 
+        # 学習アップデート数をカウント（actor warmup/anneal に使用）
+        try:
+            self.learn_updates += 1
+        except Exception:
+            self.learn_updates = getattr(self, 'learn_updates', 0) + 1
         return {
             "loss/model_recon": float(recon_loss.detach().cpu()),
             "loss/model_reward": float(reward_loss.detach().cpu()),
@@ -949,6 +1159,8 @@ class DreamerV3Agent:
             "loss/policy": float(policy_loss.detach().cpu()),
             "loss/value": float(value_loss.detach().cpu()),
             "policy/entropy": float(entropy.detach().cpu()),
+            "loss/policy_scalar": float(policy_loss.detach().cpu()),
+            "loss/value_scalar": float(value_loss.detach().cpu()),
             "value/mean": float(values.mean().detach().cpu()),
             "value/explained_variance": float(value_ev),
             "reward/mae": float(reward_mae),
@@ -956,8 +1168,11 @@ class DreamerV3Agent:
             "world/psnr_db": float(world_psnr),
             "world/recon_mse": float(mse_val),
             "optim/grad_global_norm": float(grad_global_norm.detach().cpu()) if 'grad_global_norm' in locals() else 0.0,
+            "optim/grad_actor_norm": float(grad_actor_norm) if 'grad_actor_norm' in locals() else 0.0,
+            "optim/grad_critic_norm": float(grad_critic_norm) if 'grad_critic_norm' in locals() else 0.0,
             "optim/lr": lr0,
         }
+        
     
     def _generate_imagination_priors(self, h_seq: torch.Tensor, context_batch: List[Dict] = None) -> Optional[torch.Tensor]:
         """Generate PriorNet logits for imagination rollouts."""
