@@ -1,0 +1,137 @@
+\begin{thebibliography}{21}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Hafner et~al.(2023{\natexlab{a}})]{hafner2023dreamerv3}
+Danijar Hafner et~al.
+\newblock Mastering diverse domains through world models (dreamerv3).
+\newblock \emph{arXiv preprint arXiv:2301.04104}, 2023{\natexlab{a}}.
+\newblock URL \url{https://arxiv.org/abs/2301.04104}.
+
+\bibitem[{Farama Foundation}(2023)]{minigrid_doorkey}
+{Farama Foundation}.
+\newblock Minigrid --- doorkey environment.
+\newblock \url{https://minigrid.farama.org/environments/minigrid/DoorKeyEnv/},
+  2023.
+
+\bibitem[Hafner(2021)]{hafner2021crafter}
+Danijar Hafner.
+\newblock Crafter: Benchmarking the spectrum of agent capabilities.
+\newblock \emph{arXiv preprint arXiv:2109.06780}, 2021.
+\newblock URL \url{https://arxiv.org/abs/2109.06780}.
+
+\bibitem[Matthews et~al.(2024)]{matthews2024craftax}
+Michael Matthews et~al.
+\newblock Craftax: A lightning-fast benchmark for open-ended rl.
+\newblock \emph{arXiv preprint arXiv:2402.16801}, 2024.
+\newblock URL \url{https://arxiv.org/abs/2402.16801}.
+
+\bibitem[Huang et~al.(2022{\natexlab{a}})]{huang2022lmp}
+Wenlong Huang et~al.
+\newblock Language models as zero-shot planners.
+\newblock \emph{arXiv preprint arXiv:2201.07207}, 2022{\natexlab{a}}.
+\newblock URL \url{https://arxiv.org/abs/2201.07207}.
+
+\bibitem[Huang et~al.(2022{\natexlab{b}})]{huang2022pmlr}
+Wenlong Huang et~al.
+\newblock Extracting actionable knowledge for embodied agents.
+\newblock In \emph{Proceedings of the 39th International Conference on Machine
+  Learning}, volume 162 of \emph{Proceedings of Machine Learning Research},
+  pages 9058--9077, 2022{\natexlab{b}}.
+\newblock URL \url{https://proceedings.mlr.press/v162/huang22a/huang22a.pdf}.
+
+\bibitem[Yao et~al.(2023)]{yao2023react}
+Shunyu Yao et~al.
+\newblock React: Synergizing reasoning and acting in language models.
+\newblock \emph{arXiv preprint arXiv:2210.03629}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2210.03629}.
+
+\bibitem[Wang et~al.(2023)]{wang2023voyager}
+Guanzhi Wang et~al.
+\newblock Voyager: An open-ended embodied agent in minecraft.
+\newblock \emph{arXiv preprint arXiv:2305.16291}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2305.16291}.
+
+\bibitem[Shinn et~al.(2023{\natexlab{a}})]{shinn2023reflexion}
+Noah Shinn et~al.
+\newblock Reflexion: Language agents with verbal reinforcement learning.
+\newblock \emph{arXiv preprint arXiv:2303.11366}, 2023{\natexlab{a}}.
+\newblock URL \url{https://arxiv.org/abs/2303.11366}.
+
+\bibitem[Shinn et~al.(2023{\natexlab{b}})]{shinn2023reflexionOpenReview}
+Noah Shinn et~al.
+\newblock Reflexion: language agents with verbal reinforcement learning.
+\newblock \url{https://openreview.net/forum?id=vAElhFcKW6}, 2023{\natexlab{b}}.
+
+\bibitem[Liu et~al.(2023)]{liu2023agentbench}
+Xiaogang Liu et~al.
+\newblock Agentbench: Evaluating llms as agents.
+\newblock \emph{arXiv preprint arXiv:2308.03688}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2308.03688}.
+
+\bibitem[Wu et~al.(2023)]{wu2023smartplay}
+Yujia Wu et~al.
+\newblock Smartplay: A benchmark for llms as intelligent agents.
+\newblock \emph{arXiv preprint arXiv:2310.01557}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2310.01557}.
+
+\bibitem[Schulman et~al.(2015)]{schulman2015trpo}
+John Schulman et~al.
+\newblock Trust region policy optimization.
+\newblock \emph{arXiv preprint arXiv:1502.05477}, 2015.
+\newblock URL \url{https://arxiv.org/abs/1502.05477}.
+
+\bibitem[Levine(2018)]{levine2018rlcontrol}
+Sergey Levine.
+\newblock Reinforcement learning and control as probabilistic inference.
+\newblock \emph{arXiv preprint arXiv:1805.00909}, 2018.
+\newblock URL \url{https://arxiv.org/abs/1805.00909}.
+
+\bibitem[Sekar et~al.(2020)]{sekar2020plan2explore}
+Ramanan Sekar et~al.
+\newblock Planning to explore via self-supervised world models.
+\newblock \emph{arXiv preprint arXiv:2005.05960}, 2020.
+\newblock URL \url{https://arxiv.org/abs/2005.05960}.
+
+\bibitem[Pathak et~al.(2019)]{pathak2019disagreement}
+Deepak Pathak et~al.
+\newblock Self-supervised exploration via disagreement.
+\newblock In \emph{Proceedings of the 36th International Conference on Machine
+  Learning}, volume~97 of \emph{Proceedings of Machine Learning Research},
+  2019.
+\newblock URL \url{https://proceedings.mlr.press/v97/pathak19a.html}.
+
+\bibitem[Hafner et~al.(2023{\natexlab{b}})]{dreamerv3_github}
+Danijar Hafner et~al.
+\newblock danijar/dreamerv3: Mastering diverse domains through world models.
+\newblock \url{https://github.com/danijar/dreamerv3}, 2023{\natexlab{b}}.
+
+\bibitem[Hinton et~al.(2015)Hinton, Vinyals, and Dean]{hinton2015distill}
+Geoffrey Hinton, Oriol Vinyals, and Jeff Dean.
+\newblock Distilling the knowledge in a neural network.
+\newblock \emph{arXiv preprint arXiv:1503.02531}, 2015.
+\newblock URL \url{https://arxiv.org/abs/1503.02531}.
+
+\bibitem[Guo et~al.(2017)Guo, Pleiss, Sun, and Weinberger]{guo2017calibration}
+Chuan Guo, Geoff Pleiss, Yu~Sun, and Kilian~Q Weinberger.
+\newblock On calibration of modern neural networks.
+\newblock In \emph{Proceedings of the 34th International Conference on Machine
+  Learning}, volume~70 of \emph{Proceedings of Machine Learning Research},
+  pages 1321--1330, 2017.
+\newblock URL \url{https://arxiv.org/abs/1706.04599}.
+
+\bibitem[Shinji(2025)]{lore_github}
+Ogasa Shinji.
+\newblock kikuya1179/lore.
+\newblock \url{https://github.com/kikuya1179/LoRe}, 2025.
+
+\bibitem[Ahn et~al.(2022)]{ahn2022saycan}
+Michael Ahn et~al.
+\newblock Do as i can, not as i say: Grounding language in robotic affordances.
+\newblock \emph{arXiv preprint arXiv:2204.01691}, 2022.
+\newblock URL \url{https://arxiv.org/abs/2204.01691}.
+
+\end{thebibliography}

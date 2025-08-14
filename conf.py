@@ -4,7 +4,7 @@ from typing import Optional
 
 @dataclass
 class LLMConfig:
-    enabled: bool = False
+    enabled: bool = True
     budget_total: int = 500
     cooldown_steps: int = 200
     success_cooldown_steps: int = 500
@@ -63,14 +63,14 @@ class TrainConfig:
     batch_size: int = 32
     learning_rate: float = 1e-4
     gamma: float = 0.99
-    entropy_coef: float = 0.08
+    entropy_coef: float = 0.04
     # Exploration schedule
     epsilon_start: float = 0.3
-    epsilon_end: float = 0.20
-    epsilon_anneal_steps: int = 20_000
+    epsilon_end: float = 0.10
+    epsilon_anneal_steps: int = 10_000
     # Softmax temperature schedule (for sampling)
     tau_start: float = 1.2
-    tau_end: float = 1.4
+    tau_end: float = 1.2
     tau_anneal_steps: int = 5_000
     # Actor warmup schedule
     actor_warmup_steps: int = 8_000
@@ -79,7 +79,7 @@ class TrainConfig:
     replay_capacity: int = 100_000
     seq_len: int = 16
     warmup_steps: int = 1_000
-    updates_per_step: int = 2
+    updates_per_step: int = 1
     # Success-biased replay (non-invasive boost)
     replay_success_boost: float = 5.0
     replay_back_steps: int = 10
@@ -88,16 +88,16 @@ class TrainConfig:
     eval_episodes: int = 5
     eval_seed: int = 0
     # Prefill before training (alias of warmup for clarity in logs)
-    min_prefill_steps: int = 1000
-    # Reward shaping (disabled to keep env return pure)
-    shaping_enabled: bool = False
-    shaping_key_bonus: float = 0.0
-    shaping_door_bonus: float = 0.0
-    shaping_invalid_penalty: float = 0.0
-    shaping_stationary_penalty: float = 0.0
+    min_prefill_steps: int = 3000
+    # Reward shaping (event-based; safe defaults)
+    shaping_enabled: bool = True
+    shaping_key_bonus: float = 0.05
+    shaping_door_bonus: float = 0.10
+    shaping_invalid_penalty: float = 0.001
+    shaping_stationary_penalty: float = 0.001
     shaping_stationary_N: int = 10
     shaping_use_potential: bool = False
-    shaping_potential_cap: float = 0.0
+    shaping_potential_cap: float = 0.01
     # valid限定ノイズ（εの一様混合は有効アクションに限定）
     valid_only_noise: bool = True
 
@@ -109,11 +109,6 @@ class ModelConfig:
     llm_features_dim: int = 0
     # Synthetic/BC (kept for compatibility in agent)
     lambda_bc: float = 0.1
-    # Entropy target for Lagrange control
-    entropy_target: float = 1.4
-    # Actor warmup/anneal settings (read by agent)
-    actor_warmup_steps: int = 8000
-    actor_anneal_steps: int = 8000
 
 
 @dataclass

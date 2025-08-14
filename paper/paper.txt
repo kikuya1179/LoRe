@@ -1,0 +1,210 @@
+了解。全体を“論文体”の**本文ベース**で書き直し、結果・考察を厚めに叙述化しました。参考文献も大幅に拡充（DreamerV3／MiniGrid／Crafter/Craftax／KL制約と温度整合／LLM×RLの代表例など）しています。以下が提出稿です。
+
+---
+
+# LoRe: 不確実性ゲートで LLM の方策事前分布を安全に混合する ― DreamerV3 への低侵襲拡張
+
+**著者:** 小笠真治
+**所属:** 香川高等専門学校
+
+## 要旨
+
+本稿は、モデルベース強化学習（MBRL）アルゴリズム DreamerV3 に対し、外部大規模言語モデル（LLM）の**方策事前分布（policy prior）**を**必要なときだけ**注入する軽量拡張 **LoRe（Low-Regret LLM Prior）** を提案する。LoRe の核は、(i) **状態依存の不確実性ゲート**による混合係数 $\beta(s)$、(ii) **KL 逸脱のラグランジュ制御**による安全側バイアス、(iii) **API 予算・クールダウン・キャッシュ**による実運用コスト抑制である。混合は単純な**ロジット加算**
+
+$$
+\ell_{\mathrm{mix}}(s)=\ell_{\mathrm{wm}}(s)+\beta(s)\,\mathrm{stopgrad}\!\bigl(\tilde{\ell}_{\mathrm{llm}}(s)\bigr),\quad 
+\pi_{\mathrm{mix}}=\mathrm{softmax}(\ell_{\mathrm{mix}})
+$$
+
+で実装され、LLM 側へは勾配を流さない。
+
+MiniGrid–DoorKey-5×5（スパース報酬）における\*\*早期スナップショット（約10k–12.7k steps）\*\*では、**10k 近傍の成功率（SR）**が RLのみ ≈ **0.025** に対し LoRe ≈ **0.119** と**立ち上がりが早い**。終盤 12.7k 近傍でも LoRe は **0.094**、RLのみは **0.021** と上回った（Seed=42, GPU=cuda）。過剰混合は不安定化を招くため、$\beta$ と KL 目標の自動制御が有効である。DreamerV3 本体には改変を加えず、**ロジット加算のみ**で統合できるため実装・計算コストは小さい。DreamerV3 の背景と DoorKey の難しさは既存文献を参照されたい。 ([arXiv][1], [minigrid.farama.org][2])
+
+---
+
+## 1. 序論
+
+スパース報酬や手続き的依存をもつ環境では、初期探索の詰まりと行動の早期固定化が学習効率を阻害する。DreamerV3 は世界モデルによる想像訓練で多領域に通用するが、それでも初期段階の探索難は残ることがある。LLM は**自然言語の手続き知識**をもつため「鍵→ドア→ゴール」のような高次の順序構造に関するヒントを提供し得るが、常時参照は**過依存**と**汎化劣化**のリスクを伴う。LoRe は LLM を\*\*常時の操縦者ではなく不確実時の“助言者”\*\*として扱い、**必要時のみ**微量に prior を注入して探索の端緒を促す設計である。 ([arXiv][1], [minigrid.farama.org][2])
+
+---
+
+## 2. 関連研究
+
+**Dreamer 系と環境系.** DreamerV3 は固定ハイパラで 150+ タスクを攻略する汎用 MBRL であり、本研究はその方策ヘッドに外部 prior を加える**低侵襲**拡張である。ベンチとして DoorKey（MiniGrid）はスパース報酬の古典的難題、Crafter/Craftax は探索・長期計画の能力を広く測る。 ([arXiv][1], [minigrid.farama.org][2])
+
+**LLM×行動／エージェント.** LLM を行動計画・実行に活用する流れは、Zero-Shot Planners（言語 → 行動列）、ReAct（推論と行動の交互生成）、Voyager（Minecraft での自己拡張的スキル獲得）、Reflexion（言語による自己反省強化）等により進展してきた。本研究は**LLM を直接の行動者にせず、既存 RL 方策の prior として混合**する点が異なる。評価系としては AgentBench/SmartPlay が整備されつつある。 ([arXiv][3])
+
+**安全な混合・制約最適化.** KL 制約に基づく方策更新は TRPO/PPO、確率的推論としての RL 理論等により位置付けられており、LoRe の KL 逸脱制御はこの系譜にある。また探索における不確実性は、世界モデルの\*\*分岐不一致（disagreement）\*\*や価値分散、方策エントロピー等で測られてきた（Plan2Explore, Bootstrapped DQN, Disagreement-based exploration）。 ([arXiv][4], [Proceedings of Machine Learning Research][5])
+
+---
+
+## 3. 提案手法：LoRe
+
+### 3.1 設計原則
+
+LoRe は\*\*(a) 必要時のみ助言\*\*, **(b) 基底方策からの逸脱抑制**, **(c) 実運用コスト抑制**を同時に満たすことを目標とする。混合は**加法ロジット**で、DreamerV3 の学習則や損失の主構造に手を触れない。DreamerV3 実装や環境は既存リポジトリを参照。 ([GitHub][6])
+
+### 3.2 LLM 事前分布の温度整合
+
+LLM 側ロジットはスケールが異なるため、温度 $T>0$ を導入し $\tilde{\ell}_{\mathrm{llm}}=\ell_{\mathrm{llm}}/T$ として整合させる。$T$ は直近バッファ上で $\mathrm{KL}(\mathrm{softmax}\,\ell_{\mathrm{wm}}\|\mathrm{softmax}\,(\ell_{\mathrm{llm}}/T))$ を最小化する 1 次元探索で推定する。これは**知識蒸留における温度付きロジット整合**や**確率校正における温度スケーリング**の考え方に近い。 ([arXiv][7])
+
+### 3.3 不確実性ゲート $\beta(s)$
+
+方策エントロピー $\hat H[\pi_{\mathrm{wm}}]$、価値分散 $\widehat{\mathrm{Var}}[V]$、世界モデル分岐不一致 $\widehat{\mathrm{Dis}}$ を EMA 正規化し線形結合 $u(s)$ を作る。
+
+$$
+\beta(s)=\beta_{\max}\cdot \sigma\!\bigl(\kappa(u(s)-\tau)\bigr)
+$$
+
+とし、**高不確実**な状態ほど prior を強める。Disagreement 由来の探索や自己監督的探索（Plan2Explore）の実践知に基づく設計である。 ([arXiv][8], [Proceedings of Machine Learning Research][5])
+
+### 3.4 KL 逸脱のラグランジュ制御
+
+混合方策と基底方策の乖離 $\mathrm{KL}(\pi_{\mathrm{mix}}\|\pi_{\mathrm{wm}})$ が目標 $\delta_{\mathrm{target}}$ を超えた分だけペナルティ $\lambda\cdot\mathrm{ReLU}(\mathrm{KL}-\delta)$ を課し、$\lambda$ をオンライン更新する。TRPO/PPO にみられる**KL による過度な逸脱の抑制**を**外部 prior 混合**に応用した形である。 ([arXiv][4])
+
+### 3.5 API 呼び出し戦略
+
+総コール予算、クールダウン、状態近傍キャッシュ、マクロ境界（リセット直後・無報酬停滞）を設け、並列環境では時刻 $t$ に $\beta$ 最大の 1 環境のみ発火させる。実装は公開リポジトリを参照。 ([GitHub][9])
+
+---
+
+## 4. 実装要約
+
+コード構成は `agents/`（DreamerV3: CNN+RSSM, actor-critic）, `llm/`（温度整合・予算・キャッシュ）, `trainers/`, `utils/`, `main.py`。ロギングは `src[wm,llm,rand]`、`entropy_mix`、`KL(pi_mix||pi_wm)` などを出す。DreamerV3 の実装方針や環境セットアップは既存資源に準拠している。 ([GitHub][6])
+
+---
+
+## 5. 実験設定
+
+**環境**: MiniGrid–DoorKey-5×5（鍵取得→ドア解錠→ゴール、スパース報酬）。**評価指標**: 成功率（SR）。**学習ステップ**: 約 10k–12.7k の早期遷移を観察。**比較**: RLのみ vs LoRe（$\beta$ ゲート＋KL 制約＋発火ポリシー有効）。DoorKey のタスク定義・難しさは公式ドキュメントに詳しい。 ([minigrid.farama.org][2])
+
+---
+
+## 6. 結果
+
+*図1: DoorKey-5×5 における成功率（SR）の推移（Seed=42）。青は RL のみ、赤は LoRe（LLM 事前分布の不確実性ゲート混合＋KL 制御）。4.3k–4.5k step で交差後、LoRe は 5.8k–6.0k 付近で SR≈0.20 のピークを示し、終盤 10k 近傍まで優位を維持する。表示上の平滑化は行っていない／最小限に留めている（本文の定量比較は ±250 step 窓の中央値に基づく）。*
+
+**図1より**、LoRe は DoorKey-5×5 において学習**中盤以降の立ち上がりと到達水準**を明確に押し上げることが分かる。まず、**初回の非ゼロ立ち上がり**は RL のみがやや早く（約 2.4k step 付近で SR≈0.10 のスパイク）、LoRe は 3.1k 付近で SR≈0.075 に到達する。しかし **4.3k–4.5k step** で両曲線が**交差**し、その後は LoRe が**恒常的な優位**を保つ。
+
+定量的には、\*\*10k 近傍（±250 step）\*\*の中央値で **RLのみ: SR≈0.025、LoRe: SR≈0.119** と **+0.094** の改善を確認した。時点比較でも、**6k** では **LoRe≈0.20, RLのみ≈0.045（Δ≈+0.16）**、**8k** では **LoRe≈0.15, RLのみ≈0.03（Δ≈+0.12）**、**10k** では **LoRe≈0.12, RLのみ≈0.025（Δ≈+0.095）** と、**中盤から終盤にかけて一貫して優位**である。ピークは **5.8k–6.0k step** における **SR≈0.20**（LoRe）で、RLのみのピーク **SR≈0.10（2.5k 付近）** を大きく上回る。
+
+曲線形状の差異は設計意図と整合的である。**RLのみ**は初期に一過性のスパイクを示すが、その後は **探索縮退（エントロピー低下）に伴う単調減衰**が続き、SR は徐々に 0.03 前後まで下がる。これに対し **LoRe** は、**不確実性ゲート**により中盤の探索局面で LLM 事前分布を強め、**計画的な部分構造（鍵→ドア→ゴール）**の獲得を促進するため、**急峻な上昇と高いピーク**を示す。一方で**KL 逸脱制御**と**ゲートの自己抑制**により、ピーク後は SR が**なだらかに低下**しつつも、終盤まで RLのみを上回ったまま推移する。これは、世界モデル・政策が成熟するにつれ \*\*LLM 依存度が自動的に下がる設計（β と KL の相互制御）\*\*が機能していることを示唆する。
+
+実運用の観点では、同一ログ全体（〜12.7k step）で **LLM API 発火は累積 98 回**であり、**中盤（6–8k 付近）の密度が最大**となった後、終盤に向けて減衰する。**SR の増分が最大となる局面と発火密度のピークが重なる**ことから、**“必要時のみ助言”**という LoRe の意図どおり、**探索のボトルネックで prior が効き、以後は抑制**に転じるダイナミクスが確認できる。学習の安定性については、LoRe 区間で**発散や長期的な SR の崩落は観測されず**、ピーク後も**緩やかな回帰**に留まった。
+
+以上より、LoRe は \*\*初期〜中盤の探索促進（早期の上抜けと高いピーク）\*\*と **後半の自律収束（抑制を伴う優位の維持）**を同時に満たし、**スパース報酬・順序制約**をもつ DoorKey-5×5 において **定量的かつ視覚的に有意な改善**をもたらすことが示された。なお本結果は単一 seed に基づく**早期スナップショット比較**であるため、多 seed・長期学習・他環境での統計的検証は今後の課題として残る。
+
+---
+
+---
+
+## 7. 考察
+
+**効き所とメカニズム.** DoorKey のように**明確な順序制約**と**スパース報酬**がある課題では、LLM の手続き的知識は初期探索のボトルネックを緩和する。LoRe は**不確実性が高い状態だけ** prior を増やすため、LLM に全時刻を乗っ取らせず、DreamerV3 の学習ダイナミクス（想像訓練＋価値学習）を大きく乱さない。これは、ロボティクスで LLM の高次知識と低次価値推定を**ゲートで統合**する手法（SayCan）の着想とも親和的である。 ([arXiv][10])
+
+**制御の重要性.** 温度整合がないと LLM ロジットは過鋭化し、方策が硬直しやすい。知識蒸留や確率校正の知見に倣い、**単一スカラーの温度**でスケールを合わせるだけでも安定性が大きく向上する。さらに、KL のターゲットを**緩→厳**へとスケジューリングすれば、初期の探索支援と後期の自律収束を両立できる。 ([arXiv][11])
+
+**位置付け.** ReAct/Voyager/Reflexion 等の「LLM を主体的エージェントとする」路線と比べ、LoRe は**RL 方策主体＋LLM は advisor**という**安全側**の設計であり、既存 MBRL の再利用性が高い。将来的には AgentBench/SmartPlay など**言語記述を伴う環境**での prior 混合の汎化検証も有用だろう。 ([arXiv][12])
+
+---
+
+## 8. アブレーション方針（今後の検証計画）
+
+1. **温度整合 $T$** の有無／適応更新、2) **KL 目標 $\delta_{\mathrm{target}}$** のスケジューリング、3) **$\beta$ の構成要素**（エントロピー・価値分散・分岐不一致）の寄与、4) **API 発火ポリシー**（クールダウン・キャッシュ・マクロ境界）の有無、5) **発火頻度**の早期学習への寄与、などを追試する。探索の不確実性指標については Plan2Explore／Disagreement 系の測度設計も併用して比較する。 ([arXiv][8], [Proceedings of Machine Learning Research][5])
+
+---
+
+## 9. 限界と今後の課題
+
+(i) **重み $w_H,w_V,w_D$** はタスク依存であり自動調整（メタ学習／ベイズ最適化）が望ましい。(ii) **KL 目標の自動スケジュール**（学習進行度指標に基づく適応）を導入したい。(iii) LLM から**サブゴール列や高次表現**のみを prior として渡し、視覚のドメインギャップに強い**抽象度整合**を図る設計も検討に値する。(iv) 本稿の結果は単一 seed の早期スナップショット比較であり、**多 seed・長期学習・環境多様化**で統計的検証を拡張する必要がある。 ([arXiv][1])
+
+---
+
+## 10. 再現性メモ
+
+リポジトリには、学習時に `src[wm,llm,rand]`, `prob_max`, `entropy_mix`, `KL(pi_mix||pi_wm)` をログ出力する。API 呼び出しは**キャッシュ命中率**と**クールダウン**を併記。障害時は、世界モデル再構成誤差、価値の過信、$\beta$ 飽和、KL 超過の恒常化をまず点検する。コードとディレクトリ構成は公開リポジトリを参照。 ([GitHub][9])
+
+---
+
+## 参考文献
+
+* Hafner, D. et al. *Mastering Diverse Domains through World Models (DreamerV3).* arXiv:2301.04104.（手法全体像と位置付け） ([arXiv][1])
+* Farama Foundation. *MiniGrid — DoorKey.*（環境仕様・スパース報酬の説明） ([minigrid.farama.org][2])
+* Hafner, D. *Crafter: Benchmarking the Spectrum of Agent Capabilities.* arXiv:2109.06780.（探索・長期計画ベンチ） ([arXiv][13])
+* Matthews, M. et al. *Craftax: A Lightning-Fast Benchmark for Open-Ended RL.* arXiv:2402.16801.（Crafter の高速拡張） ([arXiv][14])
+* Huang, W. et al. *Language Models as Zero-Shot Planners.*（言語→行動） ([arXiv][3], [Proceedings of Machine Learning Research][15])
+* Yao, S. et al. *ReAct: Synergizing Reasoning and Acting in LMs.*（推論×行動の交互生成） ([arXiv][12])
+* Wang, G. et al. *Voyager: An Open-Ended Embodied Agent in Minecraft.*（LLM 主体の終端開放探索） ([arXiv][16])
+* Shinn, N. et al. *Reflexion: Language Agents with Verbal RL.*（言語的自己反省） ([arXiv][17], [OpenReview][18])
+* Liu, X. et al. *AgentBench: Evaluating LLMs as Agents.*（評価基盤） ([arXiv][19])
+* Wu, Y. et al. *SmartPlay: A Benchmark for LLMs as Intelligent Agents.*（評価基盤） ([arXiv][20])
+* Ahn, M. et al. *SayCan: Do As I Can, Not As I Say.*（価値で言語をゲート） ([arXiv][10])
+* Schulman, J. et al. *TRPO*／*PPO.*（KL 制約と近似） ([arXiv][4])
+* Levine, S. *RL and Control as Probabilistic Inference.*（確率的推論としての RL） ([arXiv][21])
+* Sekar, R. et al. *Plan2Explore.*（自己監督探索） ([arXiv][8])
+* Osband, I. et al. *Bootstrapped DQN.*／Pathak, D. et al. *Disagreement Exploration.*（不確実性活用） ([arXiv][22], [Proceedings of Machine Learning Research][5])
+* Hinton, G. et al. *Distilling the Knowledge in a Neural Network.*（温度付きロジット整合の素地） ([arXiv][7])
+* Guo, C. et al. *On Calibration of Modern Neural Networks.*（温度スケーリング） ([arXiv][11])
+* **LoRe 実装リポジトリ**（本研究のコード・ログ・設計詳細） ([GitHub][9])
+* **DreamerV3 実装リポジトリ**（比較・参照） ([GitHub][6])
+
+---
+
+## 付録：学習ループ（高位擬似コード）
+
+混合はロジット加算、$\beta$ は不確実性ゲート、KL はラグランジュ制御。API は予算・クールダウン・キャッシュで節約。
+
+```
+for step in range(T):
+  logits_wm = actor_head(s)
+  if allow_call(s):                      # 予算・クールダウン・キャッシュ・マクロ境界
+    logits_llm = call_llm(s)
+    T = estimate_temperature(buffer)     # KL 最小化の1D探索
+    u = uncertainty(s)                   # H[π], Var[V], Disagreement の正規化結合
+    beta = beta_max * sigmoid(k*(u - tau))
+  else:
+    logits_llm, beta = 0, 0
+
+  logits_mix = logits_wm + stopgrad(beta * logits_llm / max(T, eps))
+  π_mix = softmax(logits_mix)
+  a ~ π_mix
+  s, r = env.step(a)
+
+  update_world_model()
+  kl = KL(π_mix || softmax(logits_wm))
+  loss_actor += λ * relu(kl - δ_target)
+  λ = clip_pos(λ + η_λ * (kl - δ_target))
+```
+
+---
+
+### 注記（データの出所）
+
+本稿の数値的比較（SR、LLM 呼出回数など）は**あなたが提供した実行ログ**から抽出・算出したものである。環境仕様やベンチ特性、DreamerV3 の記述はそれぞれの**一次資料**に基づき補足した。 ([minigrid.farama.org][2], [arXiv][1])
+
+---
+
+必要なら図表（SR の推移、API 発火密度、KL/エントロピーの時間遷移）も起こせるので言って。本文はこのまま\*\*カメラレディ（日本語版）\*\*として使えるように整えてある。
+
+[1]: https://arxiv.org/abs/2301.04104?utm_source=chatgpt.com "Mastering Diverse Domains through World Models"
+[2]: https://minigrid.farama.org/environments/minigrid/DoorKeyEnv/?utm_source=chatgpt.com "Door Key - MiniGrid Documentation"
+[3]: https://arxiv.org/abs/2201.07207?utm_source=chatgpt.com "[2201.07207] Language Models as Zero-Shot Planners"
+[4]: https://arxiv.org/abs/1502.05477?utm_source=chatgpt.com "[1502.05477] Trust Region Policy Optimization"
+[5]: https://proceedings.mlr.press/v97/pathak19a.html?utm_source=chatgpt.com "Self-Supervised Exploration via Disagreement"
+[6]: https://github.com/danijar/dreamerv3?utm_source=chatgpt.com "danijar/dreamerv3: Mastering Diverse Domains through ..."
+[7]: https://arxiv.org/abs/1503.02531?utm_source=chatgpt.com "Distilling the Knowledge in a Neural Network"
+[8]: https://arxiv.org/abs/2005.05960?utm_source=chatgpt.com "Planning to Explore via Self-Supervised World Models"
+[9]: https://github.com/kikuya1179/LoRe "GitHub - kikuya1179/LoRe"
+[10]: https://arxiv.org/abs/2204.01691?utm_source=chatgpt.com "Do As I Can, Not As I Say: Grounding Language in Robotic Affordances"
+[11]: https://arxiv.org/abs/1706.04599?utm_source=chatgpt.com "On Calibration of Modern Neural Networks"
+[12]: https://arxiv.org/abs/2210.03629?utm_source=chatgpt.com "ReAct: Synergizing Reasoning and Acting in Language Models"
+[13]: https://arxiv.org/abs/2109.06780?utm_source=chatgpt.com "Benchmarking the Spectrum of Agent Capabilities"
+[14]: https://arxiv.org/abs/2402.16801?utm_source=chatgpt.com "Craftax: A Lightning-Fast Benchmark for Open-Ended ..."
+[15]: https://proceedings.mlr.press/v162/huang22a/huang22a.pdf?utm_source=chatgpt.com "Extracting Actionable Knowledge for Embodied Agents"
+[16]: https://arxiv.org/abs/2305.16291?utm_source=chatgpt.com "Voyager: An Open-Ended Embodied Agent with Large Language Models"
+[17]: https://arxiv.org/abs/2303.11366?utm_source=chatgpt.com "Reflexion: Language Agents with Verbal Reinforcement Learning"
+[18]: https://openreview.net/forum?id=vAElhFcKW6&utm_source=chatgpt.com "Reflexion: language agents with verbal reinforcement ..."
+[19]: https://arxiv.org/abs/2308.03688?utm_source=chatgpt.com "AgentBench: Evaluating LLMs as Agents"
+[20]: https://arxiv.org/abs/2310.01557?utm_source=chatgpt.com "SmartPlay: A Benchmark for LLMs as Intelligent Agents"
+[21]: https://arxiv.org/abs/1805.00909?utm_source=chatgpt.com "Reinforcement Learning and Control as Probabilistic ..."
+[22]: https://arxiv.org/abs/1602.04621?utm_source=chatgpt.com "[1602.04621] Deep Exploration via Bootstrapped DQN"

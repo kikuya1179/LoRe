@@ -1,0 +1,21 @@
+\contentsline {section}{\numberline {1}序論}{4}{section.1}%
+\contentsline {section}{\numberline {2}関連研究}{4}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Dreamer 系と環境系}{4}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}LLM×行動／エージェント}{4}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}安全な混合・制約最適化}{4}{subsection.2.3}%
+\contentsline {section}{\numberline {3}提案手法：LoRe}{5}{section.3}%
+\contentsline {subsection}{\numberline {3.1}設計原則}{5}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}LLM 事前分布の温度整合}{5}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}不確実性ゲート $\beta (s)$}{5}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}KL 逸脱のラグランジュ制御}{5}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}API 呼び出し戦略}{6}{subsection.3.5}%
+\contentsline {section}{\numberline {4}実装要約}{6}{section.4}%
+\contentsline {section}{\numberline {5}実験設定}{6}{section.5}%
+\contentsline {section}{\numberline {6}結果}{6}{section.6}%
+\contentsline {section}{\numberline {7}考察}{8}{section.7}%
+\contentsline {subsection}{\numberline {7.1}効き所とメカニズム}{8}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}制御の重要性}{8}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}位置付け}{8}{subsection.7.3}%
+\contentsline {section}{\numberline {8}アブレーション方針（今後の検証計画）}{8}{section.8}%
+\contentsline {section}{\numberline {9}限界と今後の課題}{9}{section.9}%
+\contentsline {section}{\numberline {10}再現性メモ}{9}{section.10}%

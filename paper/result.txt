@@ -1,0 +1,418 @@
+(base) PS C:\Users\Sophie\Documents\LoRe> C:/Users/Sophie/anaconda3/Scripts/activate
+(base) PS C:\Users\Sophie\Documents\LoRe> conda activate LoRe
+(LoRe) PS C:\Users\Sophie\Documents\LoRe> python -m LoRe.main --total_frames 20000  
+C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\pygame\pkgdata.py:25: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import resource_stream, resource_exists
+[Reproducibility] Seed: 42, Device: cuda, Deterministic: True
+[GPU] DreamerV3Agent components on GPU: WorldModel, ActorCritic, Encoder
+step=250 episode=1 return=0.00 success_rate=0.000
+[   250] Loss: 0.0000 Value: 0.000 Entropy(train): 0.00000 | world_psnr=0.00dB recon_mse=0.0000 reward_mae=0.0000 val_ev=0.000 rew_ev=0.000 | prob_max(mean±std)=0.147±0.000 entropy_mix(mean±std)=1.94561±0.00000 entropy_wm(mean±std)=1.94561±0.00000 | pickup=0.024 toggle=0.000 unlockOpen=0.000 hasKey=0.684 invalid=0.460 | d_ag->key=1.0 d_key->door=-1.0 d_door->goal=2.0 | updates=0 total=0 train_started=False | grad_actor=0.000e+00 grad_critic=0.000e+00 Δθ_actor=0.000e+00 | src[wm,llm,rand]=[164, 0, 86]
+[   250] Episodes: 1 Success rate: 0.000 | action_hist: [39, 21, 37, 42, 39, 34, 38]
+step=500 episode=2 return=0.00 success_rate=0.000
+[   500] Loss: 0.0000 Value: 0.000 Entropy(train): 0.00000 | world_psnr=0.00dB recon_mse=0.0000 reward_mae=0.0000 val_ev=0.000 rew_ev=0.000 | prob_max(mean±std)=0.147±0.000 entropy_mix(mean±std)=1.94561±0.00000 entropy_wm(mean±std)=1.94561±0.00000 | pickup=0.022 toggle=0.000 unlockOpen=0.000 hasKey=0.644 invalid=0.468 | d_ag->key=1.0 d_key->door=-1.0 d_door->goal=2.5 | updates=0 total=0 train_started=False | grad_actor=0.000e+00 grad_critic=0.000e+00 Δθ_actor=0.000e+00 | src[wm,llm,rand]=[341, 0, 159]
+[   500] Episodes: 2 Success rate: 0.000 | action_hist: [77, 54, 77, 88, 67, 67, 70]
+step=750 episode=3 return=0.00 success_rate=0.000
+[   750] Loss: 0.0000 Value: 0.000 Entropy(train): 0.00000 | world_psnr=0.00dB recon_mse=0.0000 reward_mae=0.0000 val_ev=0.000 rew_ev=0.000 | prob_max(mean±std)=0.147±0.000 entropy_mix(mean±std)=1.94562±0.00001 entropy_wm(mean±std)=1.94562±0.00001 | pickup=0.020 toggle=0.001 unlockOpen=0.001 hasKey=0.627 invalid=0.464 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=2.0 | updates=0 total=0 train_started=False | grad_actor=0.000e+00 grad_critic=0.000e+00 Δθ_actor=0.000e+00 | src[wm,llm,rand]=[521, 0, 229]
+[   750] Episodes: 3 Success rate: 0.000 | action_hist: [114, 84, 112, 123, 106, 103, 108]
+step=1000 episode=4 return=0.00 success_rate=0.000
+[  1000] Loss: -0.0000 Value: -0.000 Entropy(train): 0.00778 | world_psnr=0.00dB recon_mse=0.0000 reward_mae=0.0000 val_ev=0.000 rew_ev=0.000 | prob_max(mean±std)=0.147±0.000 entropy_mix(mean±std)=1.94562±0.00000 entropy_wm(mean±std)=1.94562±0.00000 | pickup=0.017 toggle=0.001 unlockOpen=0.001 hasKey=0.483 invalid=0.478 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=2.5 | updates=2 total=2 train_started=True | grad_actor=0.000e+00 grad_critic=0.000e+00 Δθ_actor=4.578e-02 | src[wm,llm,rand]=[706, 0, 294]
+[  1000] Episodes: 4 Success rate: 0.000 | action_hist: [150, 125, 146, 151, 147, 140, 141]
+step=1250 episode=5 return=0.00 success_rate=0.000
+[  1250] Loss: -0.0002 Value: 0.000 Entropy(train): 1.94333 | world_psnr=19.02dB recon_mse=0.0239 reward_mae=0.0065 val_ev=-2.006 rew_ev=-2559.320 | prob_max(mean±std)=0.153±0.005 entropy_mix(mean±std)=1.94446±0.00132 entropy_wm(mean±std)=1.94446±0.00132 | pickup=0.018 toggle=0.001 unlockOpen=0.001 hasKey=0.434 invalid=0.475 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=502 train_started=True | grad_actor=1.710e-02 grad_critic=2.294e-02 Δθ_actor=4.042e-01 | src[wm,llm,rand]=[881, 0, 369]
+[  1250] Episodes: 5 Success rate: 0.000 | action_hist: [184, 163, 183, 176, 182, 182, 180]
+step=1500 episode=6 return=0.00 success_rate=0.000
+[  1500] Loss: -0.0004 Value: -0.001 Entropy(train): 1.93722 | world_psnr=26.88dB recon_mse=0.0021 reward_mae=0.0053 val_ev=-1.031 rew_ev=-2984.590 | prob_max(mean±std)=0.163±0.008 entropy_mix(mean±std)=1.94146±0.00264 entropy_wm(mean±std)=1.94146±0.00264 | pickup=0.016 toggle=0.001 unlockOpen=0.001 hasKey=0.369 invalid=0.478 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=1002 train_started=True | grad_actor=4.182e-02 grad_critic=2.237e-02 Δθ_actor=4.009e-01 | src[wm,llm,rand]=[1052, 0, 448]
+[  1500] Episodes: 6 Success rate: 0.000 | action_hist: [218, 199, 218, 203, 218, 218, 226]
+step=1750 episode=7 return=0.00 success_rate=0.000
+[  1750] Loss: -0.0009 Value: 0.003 Entropy(train): 1.93254 | world_psnr=29.05dB recon_mse=0.0013 reward_mae=0.0045 val_ev=-0.734 rew_ev=-2257.443 | prob_max(mean±std)=0.173±0.012 entropy_mix(mean±std)=1.93550±0.00729 entropy_wm(mean±std)=1.93550±0.00729 | pickup=0.015 toggle=0.001 unlockOpen=0.001 hasKey=0.335 invalid=0.475 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=1502 train_started=True | grad_actor=6.708e-02 grad_critic=2.053e-02 Δθ_actor=4.049e-01 | src[wm,llm,rand]=[1220, 0, 530]
+[  1750] Episodes: 7 Success rate: 0.000 | action_hist: [260, 238, 248, 229, 258, 252, 265]
+step=2000 episode=8 return=0.00 success_rate=0.000
+[  2000] Loss: -0.0008 Value: 0.002 Entropy(train): 1.92973 | world_psnr=29.80dB recon_mse=0.0011 reward_mae=0.0059 val_ev=-0.659 rew_ev=-3871.055 | prob_max(mean±std)=0.171±0.012 entropy_mix(mean±std)=1.93640±0.00573 entropy_wm(mean±std)=1.93640±0.00573 | pickup=0.015 toggle=0.001 unlockOpen=0.001 hasKey=0.325 invalid=0.476 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=2002 train_started=True | grad_actor=8.012e-02 grad_[  2000] Episodes: 8 Success rate: 0.000 | action_hist: [295, 271, 278, 266, 296, 291, 303]
+step=2250 episode=9 return=0.00 success_rate=0.000
+[  2250] Loss: -0.0007 Value: -0.002 Entropy(train): 1.92284 | world_psnr=30.29dB recon_mse=0.0010 reward_mae=0.0057 val_ev=-0.691 rew_ev=-4130.798 | prob_max(mean±std)=0.176±0.013 entropy_mix(mean±std)=1.93250±0.00904 entropy_wm(mean±std)=1.93250±0.00904 | pickup=0.015 toggle=0.003 unlockOpen=0.002 hasKey=0.318 invalid=0.484 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=2502 train_started=True | grad_actor=9.955e-02 grad_critic=1.586e-02 Δθ_actor=5.184e-01 | src[wm,llm,rand]=[1576, 0, 674]
+[  2250] Episodes: 9 Success rate: 0.000 | action_hist: [325, 309, 318, 307, 336, 324, 331]
+step=2404 episode=10 return=0.45 success_rate=0.100
+[  2500] Loss: -0.0020 Value: 0.005 Entropy(train): 1.91019 | world_psnr=30.12dB recon_mse=0.0010 reward_mae=0.0060 val_ev=-0.885 rew_ev=-4426.569 | prob_max(mean±std)=0.186±0.017 entropy_mix(mean±std)=1.92018±0.01628 entropy_wm(mean±std)=1.92018±0.01628 | pickup=0.015 toggle=0.003 unlockOpen=0.002 hasKey=0.349 invalid=0.479 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=3002 train_started=True | grad_actor=1.276e-01 grad_critic=2.223e-02 Δθ_actor=6.918e-01 | src[wm,llm,rand]=[1760, 0, 740]
+[  2500] Episodes: 10 Success rate: 0.100 | action_hist: [349, 356, 358, 343, 359, 365, 370]
+step=2654 episode=11 return=0.00 success_rate=0.091
+[  2750] Loss: -0.0044 Value: 0.001 Entropy(train): 1.89914 | world_psnr=30.65dB recon_mse=0.0009 reward_mae=0.0051 val_ev=-0.819 rew_ev=-3353.977 | prob_max(mean±std)=0.194±0.019 entropy_mix(mean±std)=1.91506±0.01590 entropy_wm(mean±std)=1.91506±0.01590 | pickup=0.015 toggle=0.003 unlockOpen=0.002 hasKey=0.355 invalid=0.479 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=3502 train_started=True | grad_actor=1.508e-01 grad_critic=1.685e-02 Δθ_actor=7.291e-01 | src[wm,llm,rand]=[1928, 0, 822]
+[  2750] Episodes: 11 Success rate: 0.091 | action_hist: [372, 394, 409, 379, 387, 396, 413]
+step=2904 episode=12 return=0.00 success_rate=0.083
+[  3000] Loss: -0.0033 Value: 0.001 Entropy(train): 1.90098 | world_psnr=30.31dB recon_mse=0.0010 reward_mae=0.0077 val_ev=-0.978 rew_ev=-8900.987 | prob_max(mean±std)=0.190±0.017 entropy_mix(mean±std)=1.92111±0.01229 entropy_wm(mean±std)=1.92111±0.01229 | pickup=0.015 toggle=0.003 unlockOpen=0.002 hasKey=0.386 invalid=0.479 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=4002 train_started=True | grad_actor=1.739e-01 grad_critic=2.133e-02 Δθ_actor=7.102e-01 | src[wm,llm,rand]=[2100, 0, 900]
+[  3000] Episodes: 12 Success rate: 0.083 | action_hist: [396, 424, 451, 421, 417, 432, 459]
+step=3154 episode=13 return=0.00 success_rate=0.077
+[  3250] Loss: -0.0053 Value: 0.001 Entropy(train): 1.86957 | world_psnr=29.35dB recon_mse=0.0012 reward_mae=0.0057 val_ev=-0.690 rew_ev=-4447.650 | prob_max(mean±std)=0.233±0.047 entropy_mix(mean±std)=1.88344±0.03591 entropy_wm(mean±std)=1.88344±0.03591 | pickup=0.014 toggle=0.003 unlockOpen=0.002 hasKey=0.362 invalid=0.485 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=4502 train_started=True | grad_actor=2.206e-01 grad_critic=1.687e-02 Δθ_actor=9.177e-01 | src[wm,llm,rand]=[2280, 0, 970]
+[  3250] Episodes: 13 Success rate: 0.077 | action_hist: [424, 455, 492, 464, 452, 464, 499]
+step=3404 episode=14 return=0.00 success_rate=0.071
+[  3500] Loss: -0.0106 Value: -0.001 Entropy(train): 1.78820 | world_psnr=29.89dB recon_mse=0.0011 reward_mae=0.0063 val_ev=-0.774 rew_ev=-5958.137 | prob_max(mean±std)=0.218±0.039 entropy_mix(mean±std)=1.85712±0.09281 entropy_wm(mean±std)=1.85712±0.09281 | pickup=0.014 toggle=0.003 unlockOpen=0.002 hasKey=0.363 invalid=0.489 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=5002 train_started=True | grad_actor=3.376e-01 grad_critic=1.702e-02 Δθ_actor=1.058e+00 | src[wm,llm,rand]=[2459, 0, 1041]
+[  3500] Episodes: 14 Success rate: 0.071 | action_hist: [457, 472, 531, 502, 490, 510, 538]
+step=3654 episode=15 return=0.00 success_rate=0.067
+[  3750] Loss: 0.0097 Value: 0.000 Entropy(train): 1.80434 | world_psnr=29.27dB recon_mse=0.0013 reward_mae=0.0033 val_ev=-1.171 rew_ev=-1960.449 | prob_max(mean±std)=0.212±0.026 entropy_mix(mean±std)=1.86508±0.06264 entropy_wm(mean±std)=1.86508±0.06264 | pickup=0.016 toggle=0.005 unlockOpen=0.003 hasKey=0.361 invalid=0.483 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=5502 train_started=True | grad_actor=3.925e-01 grad_critic=1.638e-02 Δθ_actor=1.201e+00 | src[wm,llm,rand]=[2654, 0, 1096]
+[  3750] Episodes: 15 Success rate: 0.067 | action_hist: [501, 501, 553, 540, 533, 542, 580]
+step=3904 episode=16 return=0.00 success_rate=0.062
+[  4000] Loss: -0.0225 Value: 0.001 Entropy(train): 1.72403 | world_psnr=30.86dB recon_mse=0.0008 reward_mae=0.0014 val_ev=-1.276 rew_ev=-265.642 | prob_max(mean±std)=0.236±0.040 entropy_mix(mean±std)=1.85659±0.06445 entropy_wm(mean±std)=1.85659±0.06445 | pickup=0.015 toggle=0.004 unlockOpen=0.003 hasKey=0.342 invalid=0.484 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=6002 train_started=True | grad_actor=4.590e-01 grad_critic=1.287e-02 Δθ_actor=1.146e+00 | src[wm,llm,rand]=[2825, 0, 1175]
+[  4000] Episodes: 16 Success rate: 0.062 | action_hist: [546, 543, 603, 563, 568, 569, 608]
+step=4154 episode=17 return=0.00 success_rate=0.059
+[  4250] Loss: -0.0093 Value: -0.005 Entropy(train): 1.69141 | world_psnr=26.07dB recon_mse=0.0028 reward_mae=0.0108 val_ev=-1.153 rew_ev=-13319.266 | prob_max(mean±std)=0.246±0.049 entropy_mix(mean±std)=1.83725±0.07520 entropy_wm(mean±std)=1.83725±0.07520 | pickup=0.015 toggle=0.004 unlockOpen=0.003 hasKey=0.334 invalid=0.485 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=6502 train_started=True | grad_actor=6.098e-01 grad_critic=3.058e-02 Δθ_actor=9.002e-01 | src[wm,llm,rand]=[3009, 0, 1241]
+[  4250] Episodes: 17 Success rate: 0.059 | action_hist: [576, 579, 626, 582, 624, 610, 653]
+step=4404 episode=18 return=0.00 success_rate=0.056
+[  4500] Loss: -0.0254 Value: 0.004 Entropy(train): 1.51218 | world_psnr=27.82dB recon_mse=0.0018 reward_mae=0.0033 val_ev=-1.251 rew_ev=-1991.892 | prob_max(mean±std)=0.322±0.052 entropy_mix(mean±std)=1.62682±0.14986 entropy_wm(mean±std)=1.62682±0.14986 | pickup=0.014 toggle=0.004 unlockOpen=0.002 hasKey=0.316 invalid=0.487 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=7002 train_started=True | grad_actor=8.194e-01 grad_critic=1.794e-02 Δθ_actor=9.458e-01 | src[wm,llm,rand]=[3193, 0, 1307]
+[  4500] Episodes: 18 Success rate: 0.056 | action_hist: [613, 612, 657, 592, 680, 648, 698]
+step=4654 episode=19 return=0.00 success_rate=0.053
+[  4750] Loss: -0.0531 Value: 0.002 Entropy(train): 1.07736 | world_psnr=30.13dB recon_mse=0.0010 reward_mae=0.0013 val_ev=-1.258 rew_ev=-266.463 | prob_max(mean±std)=0.438±0.081 entropy_mix(mean±std)=1.27596±0.14040 entropy_wm(mean±std)=1.27596±0.14040 | pickup=0.013 toggle=0.004 unlockOpen=0.002 hasKey=0.299 invalid=0.485 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=7502 train_started=True | grad_actor=9.145e-01 grad_critic=1.206e-02 Δθ_actor=9.732e-01 | src[wm,llm,rand]=[3363, 0, 1387]
+[  4750] Episodes: 19 Success rate: 0.053 | action_hist: [658, 669, 660, 595, 765, 669, 734]
+step=4904 episode=20 return=0.00 success_rate=0.050
+[  5000] Loss: -0.1038 Value: 0.001 Entropy(train): 0.85310 | world_psnr=30.84dB recon_mse=0.0008 reward_mae=0.0010 val_ev=-1.122 rew_ev=-126.988 | prob_max(mean±std)=0.474±0.093 entropy_mix(mean±std)=1.25182±0.21445 entropy_wm(mean±std)=1.25182±0.21445 | pickup=0.013 toggle=0.004 unlockOpen=0.002 hasKey=0.287 invalid=0.481 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=8002 train_started=True | grad_actor=9.792e-01 grad_critic=1.219e-02 Δθ_actor=8.003e-01 | src[wm,llm,rand]=[3525, 0, 1475]
+[  5000] Episodes: 20 Success rate: 0.050 | action_hist: [708, 738, 663, 601, 847, 685, 758]
+step=5154 episode=21 return=0.00 success_rate=0.048
+[  5250] Loss: -0.0004 Value: 0.002 Entropy(train): 0.98656 | world_psnr=31.18dB recon_mse=0.0008 reward_mae=0.0016 val_ev=-1.091 rew_ev=-139.576 | prob_max(mean±std)=0.433±0.062 entropy_mix(mean±std)=1.28220±0.17454 entropy_wm(mean±std)=1.28220±0.17454 | pickup=0.012 toggle=0.003 unlockOpen=0.002 hasKey=0.273 invalid=0.478 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=8502 train_started=True | grad_actor=2.575e-02 grad_critic=1.351e-02 Δθ_actor=2.972e-01 | src[wm,llm,rand]=[3710, 0, 1540]
+[  5250] Episodes: 21 Success rate: 0.048 | action_hist: [757, 787, 671, 605, 938, 692, 800]
+step=5404 episode=22 return=0.00 success_rate=0.045
+[  5500] Loss: -0.0037 Value: 0.000 Entropy(train): 1.13952 | world_psnr=31.46dB recon_mse=0.0007 reward_mae=0.0016 val_ev=-0.827 rew_ev=-103.626 | prob_max(mean±std)=0.387±0.058 entropy_mix(mean±std)=1.36413±0.19254 entropy_wm(mean±std)=1.36413±0.19254 | pickup=0.012 toggle=0.003 unlockOpen=0.002 hasKey=0.261 invalid=0.477 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=9002 train_started=True | grad_actor=3.214e-02 grad_critic=5.238e-03 Δθ_actor=2.041e-01 | src[wm,llm,rand]=[3883, 0, 1617]
+[  5500] Episodes: 22 Success rate: 0.045 | action_hist: [803, 823, 673, 610, 1020, 716, 855]
+step=5654 episode=23 return=0.00 success_rate=0.043
+[  5750] Loss: -0.0126 Value: -0.000 Entropy(train): 1.18085 | world_psnr=31.71dB recon_mse=0.0007 reward_mae=0.0020 val_ev=-1.027 rew_ev=-178.888 | prob_max(mean±std)=0.384±0.074 entropy_mix(mean±std)=1.30944±0.22774 entropy_wm(mean±std)=1.30944±0.22774 | pickup=0.011 toggle=0.003 unlockOpen=0.002 hasKey=0.249 invalid=0.476 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=9502 train_started=True | grad_actor=7.505e-02 grad_critic=3.648e-03 Δθ_actor=2.824e-01 | src[wm,llm,rand]=[4067, 0, 1683]
+[  5750] Episodes: 23 Success rate: 0.043 | action_hist: [854, 859, 673, 612, 1094, 755, 903]
+step=5904 episode=24 return=0.00 success_rate=0.042
+[  6000] Loss: -0.0215 Value: 0.001 Entropy(train): 1.18253 | world_psnr=31.91dB recon_mse=0.0007 reward_mae=0.0021 val_ev=-1.341 rew_ev=-222.951 | prob_max(mean±std)=0.374±0.047 entropy_mix(mean±std)=1.35704±0.22907 entropy_wm(mean±std)=1.35704±0.22907 | pickup=0.011 toggle=0.003 unlockOpen=0.002 hasKey=0.239 invalid=0.475 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=10002 train_started=True | grad_actor=1.754e-01 grad_critic=8.826e-03 Δθ_actor=4.221e-01 | src[wm,llm,rand]=[4258, 0, 1742]
+[  6000] Episodes: 24 Success rate: 0.042 | action_hist: [902, 912, 678, 613, 1181, 777, 937]
+step=6154 episode=25 return=0.00 success_rate=0.040
+[  6250] Loss: -0.0237 Value: -0.000 Entropy(train): 1.20108 | world_psnr=32.04dB recon_mse=0.0006 reward_mae=0.0020 val_ev=-1.496 rew_ev=-147.299 | prob_max(mean±std)=0.364±0.047 entropy_mix(mean±std)=1.37273±0.20605 entropy_wm(mean±std)=1.37273±0.20605 | pickup=0.011 toggle=0.003 unlockOpen=0.002 hasKey=0.233 invalid=0.472 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=10502 train_started=True | grad_actor=2.247e-01 grad_critic=3.394e-03 Δθ_actor=4.283e-01 | src[wm,llm,rand]=[4436, 0, 1814]
+[  6250] Episodes: 25 Success rate: 0.040 | action_hist: [949, 953, 680, 617, 1260, 802, 989]
+step=6404 episode=26 return=0.00 success_rate=0.038
+[  6500] Loss: -0.0477 Value: 0.000 Entropy(train): 1.19741 | world_psnr=32.00dB recon_mse=0.0006 reward_mae=0.0019 val_ev=-1.418 rew_ev=-150.888 | prob_max(mean±std)=0.364±0.050 entropy_mix(mean±std)=1.32605±0.24002 entropy_wm(mean±std)=1.32605±0.24002 | pickup=0.011 toggle=0.003 unlockOpen=0.002 hasKey=0.228 invalid=0.468 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=2.5 | updates=500 total=11002 train_started=True | grad_actor=3.398e-01 grad_critic=5.319e-03 Δθ_actor=5.646e-01 | src[wm,llm,rand]=[4611, 0, 1889]
+[  6500] Episodes: 26 Success rate: 0.038 | action_hist: [997, 1014, 683, 621, 1329, 826, 1030]
+step=6654 episode=27 return=0.00 success_rate=0.037
+[  6750] Loss: -0.0519 Value: 0.000 Entropy(train): 1.21057 | world_psnr=32.21dB recon_mse=0.0006 reward_mae=0.0017 val_ev=-1.320 rew_ev=-161.116 | prob_max(mean±std)=0.354±0.058 entropy_mix(mean±std)=1.35679±0.25037 entropy_wm(mean±std)=1.35679±0.25037 | pickup=0.010 toggle=0.003 unlockOpen=0.002 hasKey=0.220 invalid=0.466 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=11502 train_started=True | grad_actor=4.848e-01 grad_critic=4.788e-03 Δθ_actor=6.983e-01 | src[wm,llm,rand]=[4790, 0, 1960]
+[  6750] Episodes: 27 Success rate: 0.037 | action_hist: [1054, 1063, 688, 626, 1406, 841, 1072]
+step=6904 episode=28 return=0.00 success_rate=0.036
+[  7000] Loss: -0.0752 Value: 0.001 Entropy(train): 1.17386 | world_psnr=32.22dB recon_mse=0.0006 reward_mae=0.0016 val_ev=-1.271 rew_ev=-212.013 | prob_max(mean±std)=0.425±0.053 entropy_mix(mean±std)=1.22237±0.16670 entropy_wm(mean±std)=1.22237±0.16670 | pickup=0.010 toggle=0.003 unlockOpen=0.002 hasKey=0.213 invalid=0.464 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=12002 train_started=True | grad_actor=6.701e-01 grad_critic=5.410e-03 Δθ_actor=5.836e-01 | src[wm,llm,rand]=[4971, 0, 2029]
+[  7000] Episodes: 28 Success rate: 0.036 | action_hist: [1104, 1122, 691, 635, 1501, 845, 1102]
+step=7154 episode=29 return=0.00 success_rate=0.034
+[  7250] Loss: -0.1032 Value: -0.000 Entropy(train): 1.10621 | world_psnr=30.50dB recon_mse=0.0014 reward_mae=0.0095 val_ev=-1.293 rew_ev=-7896.035 | prob_max(mean±std)=0.442±0.082 entropy_mix(mean±std)=1.24302±0.18492 entropy_wm(mean±std)=1.24302±0.18492 | pickup=0.010 toggle=0.002 unlockOpen=0.002 hasKey=0.206 invalid=0.464 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=12502 train_started=True | grad_actor=8.433e-01 grad_critic=1.231e-02 Δθ_actor=5.966e-01 | src[wm,llm,rand]=[5150, 0, 2100]
+[  7250] Episodes: 29 Success rate: 0.034 | action_hist: [1162, 1165, 692, 663, 1590, 845, 1133]
+step=7404 episode=30 return=0.00 success_rate=0.033
+[  7500] Loss: 0.0239 Value: 0.000 Entropy(train): 1.00871 | world_psnr=25.93dB recon_mse=0.0032 reward_mae=0.0064 val_ev=-0.891 rew_ev=-5394.097 | prob_max(mean±std)=0.475±0.088 entropy_mix(mean±std)=1.11126±0.15090 entropy_wm(mean±std)=1.11126±0.15090 | pickup=0.010 toggle=0.002 unlockOpen=0.001 hasKey=0.203 invalid=0.462 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=13002 train_started=True | grad_actor=8.845e-01 grad_critic=1.546e-02 Δθ_actor=7.433e-01 | src[wm,llm,rand]=[5348, 0, 2152]
+[  7500] Episodes: 30 Success rate: 0.033 | action_hist: [1223, 1230, 693, 668, 1697, 847, 1142]
+step=7654 episode=31 return=0.00 success_rate=0.032
+[  7750] Loss: -0.0314 Value: 0.001 Entropy(train): 1.23343 | world_psnr=31.19dB recon_mse=0.0008 reward_mae=0.0014 val_ev=-1.234 rew_ev=-412.419 | prob_max(mean±std)=0.375±0.086 entropy_mix(mean±std)=1.54111±0.11795 entropy_wm(mean±std)=1.54111±0.11795 | pickup=0.011 toggle=0.002 unlockOpen=0.001 hasKey=0.214 invalid=0.458 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=13502 train_started=True | grad_actor=8.653e-01 grad_critic=5.053e-03 Δθ_actor=1.239e+00 | src[wm,llm,rand]=[5529, 0, 2221]
+[  7750] Episodes: 31 Success rate: 0.032 | action_hist: [1283, 1272, 722, 727, 1717, 849, 1180]
+step=7904 episode=32 return=0.00 success_rate=0.031
+[  8000] Loss: -0.0155 Value: -0.001 Entropy(train): 1.19370 | world_psnr=26.97dB recon_mse=0.0026 reward_mae=0.0046 val_ev=-1.003 rew_ev=-1646.839 | prob_max(mean±std)=0.391±0.101 entropy_mix(mean±std)=1.46588±0.14621 entropy_wm(mean±std)=1.46588±0.14621 | pickup=0.011 toggle=0.002 unlockOpen=0.001 hasKey=0.218 invalid=0.456 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=14002 train_started=True | grad_actor=9.289e-01 grad_critic=6.291e-03 Δθ_actor=9.998e-01 | src[wm,llm,rand]=[5713, 0, 2287]
+[  8000] Episodes: 32 Success rate: 0.031 | action_hist: [1311, 1340, 776, 768, 1726, 850, 1229]
+step=8154 episode=33 return=0.00 success_rate=0.030
+[  8250] Loss: -0.0260 Value: 0.000 Entropy(train): 1.14361 | world_psnr=29.01dB recon_mse=0.0014 reward_mae=0.0022 val_ev=-1.250 rew_ev=-853.193 | prob_max(mean±std)=0.500±0.145 entropy_mix(mean±std)=1.23522±0.27919 entropy_wm(mean±std)=1.23522±0.27919 | pickup=0.011 toggle=0.002 unlockOpen=0.001 hasKey=0.212 invalid=0.457 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=14502 train_started=True | grad_actor=9.297e-01 grad_critic=5.157e-03 Δθ_actor=6.876e-01 | src[wm,llm,rand]=[5902, 0, 2348]
+[  8250] Episodes: 33 Success rate: 0.030 | action_hist: [1317, 1400, 782, 803, 1810, 854, 1284]
+step=8404 episode=34 return=0.00 success_rate=0.029
+[  8500] Loss: -0.0905 Value: 0.000 Entropy(train): 0.90041 | world_psnr=31.57dB recon_mse=0.0007 reward_mae=0.0008 val_ev=-2.293 rew_ev=-99.906 | prob_max(mean±std)=0.574±0.062 entropy_mix(mean±std)=0.99031±0.15529 entropy_wm(mean±std)=0.99031±0.15529 | pickup=0.011 toggle=0.002 unlockOpen=0.001 hasKey=0.207 invalid=0.459 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=15002 train_started=True | grad_actor=9.772e-01 grad_critic=3.007e-03 Δθ_actor=7.643e-01 | src[wm,llm,rand]=[6093, 0, 2407]
+[  8500] Episodes: 34 Success rate: 0.029 | action_hist: [1320, 1438, 785, 817, 1929, 856, 1355]
+step=8654 episode=35 return=0.00 success_rate=0.029
+[  8750] Loss: -0.0740 Value: 0.000 Entropy(train): 0.57262 | world_psnr=31.99dB recon_mse=0.0006 reward_mae=0.0008 val_ev=-1.527 rew_ev=-75.444 | prob_max(mean±std)=0.593±0.121 entropy_mix(mean±std)=0.87924±0.16882 entropy_wm(mean±std)=0.87924±0.16882 | pickup=0.011 toggle=0.002 unlockOpen=0.001 hasKey=0.201 invalid=0.459 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=15502 train_started=True | grad_actor=9.899e-01 grad_critic=5.081e-03 Δθ_actor=5.608e-01 | src[wm,llm,rand]=[6274, 0, 2476]
+[  8750] Episodes: 35 Success rate: 0.029 | action_hist: [1323, 1485, 787, 820, 2037, 861, 1437]
+step=8904 episode=36 return=0.00 success_rate=0.028
+[  9000] Loss: -0.1066 Value: 0.001 Entropy(train): 0.37977 | world_psnr=32.14dB recon_mse=0.0006 reward_mae=0.0010 val_ev=-1.239 rew_ev=-70.466 | prob_max(mean±std)=0.592±0.151 entropy_mix(mean±std)=0.84025±0.18978 entropy_wm(mean±std)=0.84025±0.18978 | pickup=0.011 toggle=0.002 unlockOpen=0.001 hasKey=0.196 invalid=0.457 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=16002 train_started=True | grad_actor=9.953e-01 grad_critic=5.920e-03 Δθ_actor=5.813e-01 | src[wm,llm,rand]=[6464, 0, 2536]
+[  9000] Episodes: 36 Success rate: 0.028 | action_hist: [1324, 1541, 790, 820, 2130, 864, 1531]
+step=9154 episode=37 return=0.00 success_rate=0.027
+[  9250] Loss: -0.1540 Value: -0.000 Entropy(train): 0.44408 | world_psnr=32.30dB recon_mse=0.0006 reward_mae=0.0012 val_ev=-2.385 rew_ev=-74.983 | prob_max(mean±std)=0.553±0.221 entropy_mix(mean±std)=0.99756±0.39115 entropy_wm(mean±std)=0.99756±0.39115 | pickup=0.011 toggle=0.002 unlockOpen=0.001 hasKey=0.191 invalid=0.455 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=16502 train_started=True | grad_actor=9.776e-01 grad_critic=8.243e-04 Δθ_actor=8.204e-01 | src[wm,llm,rand]=[6654, 0, 2596]
+[  9250] Episodes: 37 Success rate: 0.027 | action_hist: [1329, 1614, 801, 822, 2208, 867, 1609]
+step=9404 episode=38 return=0.00 success_rate=0.026
+[  9500] Loss: -0.1428 Value: 0.000 Entropy(train): 0.48654 | world_psnr=32.41dB recon_mse=0.0006 reward_mae=0.0016 val_ev=-1.582 rew_ev=-150.370 | prob_max(mean±std)=0.545±0.193 entropy_mix(mean±std)=1.05825±0.34483 entropy_wm(mean±std)=1.05825±0.34483 | pickup=0.010 toggle=0.002 unlockOpen=0.001 hasKey=0.186 invalid=0.450 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=17002 train_started=True | grad_actor=9.893e-01 grad_critic=3.215e-03 Δθ_actor=7.710e-01 | src[wm,llm,rand]=[6847, 0, 2653]
+[  9500] Episodes: 38 Success rate: 0.026 | action_hist: [1332, 1709, 847, 822, 2254, 868, 1668]
+step=9654 episode=39 return=0.00 success_rate=0.026
+[  9750] Loss: -0.1412 Value: 0.001 Entropy(train): 0.45425 | world_psnr=32.46dB recon_mse=0.0006 reward_mae=0.0022 val_ev=-1.128 rew_ev=-175.062 | prob_max(mean±std)=0.571±0.163 entropy_mix(mean±std)=1.00318±0.27247 entropy_wm(mean±std)=1.00318±0.27247 | pickup=0.010 toggle=0.002 unlockOpen=0.001 hasKey=0.181 invalid=0.452 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=17502 train_started=True | grad_actor=9.968e-01 grad_critic=6.082e-03 Δθ_actor=5.205e-01 | src[wm,llm,rand]=[7044, 0, 2706]
+[  9750] Episodes: 39 Success rate: 0.026 | action_hist: [1336, 1753, 885, 822, 2354, 869, 1731]
+step=9904 episode=40 return=0.00 success_rate=0.025
+[ 10000] Loss: -0.0337 Value: -0.002 Entropy(train): 0.54101 | world_psnr=23.29dB recon_mse=0.0061 reward_mae=0.0181 val_ev=-0.857 rew_ev=-4837.859 | prob_max(mean±std)=0.701±0.228 entropy_mix(mean±std)=0.74061±0.41554 entropy_wm(mean±std)=0.74061±0.41554 | pickup=0.010 toggle=0.002 unlockOpen=0.001 hasKey=0.182 invalid=0.456 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=18002 train_started=True | grad_actor=9.601e-01 grad_critic=1.300e-02 Δθ_actor=9.481e-01 | src[wm,llm,rand]=[7230, 0, 2770]
+[ 10000] Episodes: 40 Success rate: 0.025 | action_hist: [1337, 1770, 1014, 825, 2376, 871, 1807]
+step=10154 episode=41 return=0.00 success_rate=0.024
+[ 10250] Loss: -0.0665 Value: -0.000 Entropy(train): 0.25705 | world_psnr=22.34dB recon_mse=0.0066 reward_mae=0.0034 val_ev=-0.856 rew_ev=-541.759 | prob_max(mean±std)=0.897±0.082 entropy_mix(mean±std)=0.31993±0.17355 entropy_wm(mean±std)=0.31993±0.17355 | pickup=0.010 toggle=0.002 unlockOpen=0.001 hasKey=0.193 invalid=0.466 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=18502 train_started=True | grad_actor=8.451e-01 grad_critic=4.068e-03 Δθ_actor=1.225e+00 | src[wm,llm,rand]=[7434, 0, 2816]
+[ 10250] Episodes: 41 Success rate: 0.024 | action_hist: [1338, 1774, 1231, 827, 2377, 873, 1830]
+step=10404 episode=42 return=0.00 success_rate=0.024
+[ 10500] Loss: -0.0342 Value: 0.001 Entropy(train): 0.89669 | world_psnr=27.38dB recon_mse=0.0019 reward_mae=0.0007 val_ev=-0.661 rew_ev=-129.322 | prob_max(mean±std)=0.864±0.035 entropy_mix(mean±std)=0.47554±0.07628 entropy_wm(mean±std)=0.47554±0.07628 | pickup=0.010 toggle=0.002 unlockOpen=0.001 hasKey=0.199 invalid=0.475 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=19002 train_started=True | grad_actor=7.425e-01 grad_critic=1.238e-03 Δθ_actor=7.857e-01 | src[wm,llm,rand]=[7622, 0, 2878]
+[ 10500] Episodes: 42 Success rate: 0.024 | action_hist: [1340, 1775, 1436, 837, 2378, 878, 1856]
+step=10654 episode=43 return=0.00 success_rate=0.023
+[ 10750] Loss: -0.0028 Value: 0.001 Entropy(train): 1.24042 | world_psnr=28.86dB recon_mse=0.0014 reward_mae=0.0005 val_ev=-1.383 rew_ev=-60.619 | prob_max(mean±std)=0.834±0.026 entropy_mix(mean±std)=0.61730±0.06520 entropy_wm(mean±std)=0.61730±0.06520 | pickup=0.009 toggle=0.002 unlockOpen=0.001 hasKey=0.217 invalid=0.485 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=19502 train_started=True | grad_actor=7.764e-01 grad_critic=9.847e-04 Δθ_actor=2.879e-01 | src[wm,llm,rand]=[7802, 0, 2948]
+[ 10750] Episodes: 43 Success rate: 0.023 | action_hist: [1347, 1777, 1623, 858, 2382, 898, 1865]
+step=10904 episode=44 return=0.00 success_rate=0.023
+[ 11000] Loss: 0.0536 Value: 0.000 Entropy(train): 1.19190 | world_psnr=29.17dB recon_mse=0.0013 reward_mae=0.0004 val_ev=-1.235 rew_ev=-50.558 | prob_max(mean±std)=0.831±0.036 entropy_mix(mean±std)=0.60703±0.09608 entropy_wm(mean±std)=0.60703±0.09608 | pickup=0.009 toggle=0.002 unlockOpen=0.001 hasKey=0.234 invalid=0.495 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=20002 train_started=True | grad_actor=7.892e-01 grad_critic=2.907e-04 Δθ_actor=2.763e-01 | src[wm,llm,rand]=[7981, 0, 3019]
+[ 11000] Episodes: 44 Success rate: 0.023 | action_hist: [1350, 1778, 1810, 877, 2386, 927, 1872]
+step=11154 episode=45 return=0.00 success_rate=0.022
+[ 11250] Loss: 0.0188 Value: 0.001 Entropy(train): 1.11361 | world_psnr=29.35dB recon_mse=0.0012 reward_mae=0.0004 val_ev=-0.958 rew_ev=-39.280 | prob_max(mean±std)=0.858±0.031 entropy_mix(mean±std)=0.52284±0.08165 entropy_wm(mean±std)=0.52284±0.08165 | pickup=0.009 toggle=0.002 unlockOpen=0.001 hasKey=0.244 invalid=0.505 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=20502 train_started=True | grad_actor=8.554e-01 grad_critic=1.796e-03 Δθ_actor=2.446e-01 | src[wm,llm,rand]=[8175, 0, 3075]
+[ 11250] Episodes: 45 Success rate: 0.022 | action_hist: [1352, 1784, 2021, 888, 2387, 946, 1872]
+step=11404 episode=46 return=0.00 success_rate=0.022
+[ 11500] Loss: -0.0300 Value: 0.001 Entropy(train): 1.09405 | world_psnr=29.60dB recon_mse=0.0011 reward_mae=0.0004 val_ev=-0.856 rew_ev=-35.179 | prob_max(mean±std)=0.809±0.018 entropy_mix(mean±std)=0.63969±0.03935 entropy_wm(mean±std)=0.63969±0.03935 | pickup=0.009 toggle=0.002 unlockOpen=0.001 hasKey=0.252 invalid=0.515 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=21002 train_started=True | grad_actor=8.337e-01 grad_critic=1.405e-03 Δθ_actor=1.295e-01 | src[wm,llm,rand]=[8365, 0, 3135]
+[ 11500] Episodes: 46 Success rate: 0.022 | action_hist: [1353, 1786, 2213, 909, 2391, 972, 1876]
+step=11654 episode=47 return=0.00 success_rate=0.021
+[ 11750] Loss: 0.0207 Value: 0.000 Entropy(train): 1.08037 | world_psnr=29.70dB recon_mse=0.0011 reward_mae=0.0003 val_ev=-0.888 rew_ev=-31.944 | prob_max(mean±std)=0.803±0.042 entropy_mix(mean±std)=0.64490±0.09252 entropy_wm(mean±std)=0.64490±0.09252 | pickup=0.009 toggle=0.002 unlockOpen=0.001 hasKey=0.251 invalid=0.524 | d_ag->key=1.0 d_key->door=2.0 d_door->goal=3.0 | updates=500 total=21502 train_started=True | grad_actor=8.017e-01 grad_critic=2.724e-04 Δθ_actor=1.440e-01 | src[wm,llm,rand]=[8559, 0, 3191]
+[ 11750] Episodes: 47 Success rate: 0.021 | action_hist: [1355, 1786, 2409, 925, 2392, 1006, 1877]
+step=11904 episode=48 return=0.00 success_rate=0.021
+Traceback (most recent call last):
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "C:\Users\Sophie\Documents\LoRe\LoRe\main.py", line 962, in <module>
+    raise SystemExit(main())
+  File "C:\Users\Sophie\Documents\LoRe\LoRe\main.py", line 601, in main
+    metrics = agent.update_sequence(batch_seq)
+  File "C:\Users\Sophie\Documents\LoRe\LoRe\agents\dreamer_v3.py", line 971, in update_sequence
+    h_seq, recon_seq, reward_pred_seq = self.world(obs_seq)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\Sophie\Documents\LoRe\LoRe\agents\dreamer_v3.py", line 98, in forward
+    enc.append(self.encoder(obs_seq[:, t]))
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\Sophie\Documents\LoRe\LoRe\agents\dreamer_v3.py", line 37, in forward
+    z = self.conv(x)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\container.py", line 250, in forward
+    input = module(input)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\modules\activation.py", line 561, in forward
+    return F.elu(input, self.alpha, self.inplace)
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\nn\functional.py", line 1806, in elu
+    result = torch._C._nn.elu(input, alpha)
+KeyboardInterrupt
+(LoRe) PS C:\Users\Sophie\Documents\LoRe> python -m LoRe.main --total_frames 20000
+C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\pygame\pkgdata.py:25: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import resource_stream, resource_exists
+[Reproducibility] Seed: 42, Device: cuda, Deterministic: True
+[GPU] DreamerV3Agent components on GPU: WorldModel, ActorCritic, Encoder
+[LLM] Controller initialized with budget 500
+[LLM] Estimating temperature for logits alignment...
+[LLM] Temperature estimated: 3.000
+step=250 episode=1 return=0.00 success_rate=0.000
+[   250] Loss: 0.0000 Value: 0.000 Entropy(train): 0.00000 | world_psnr=0.00dB recon_mse=0.0000 reward_mae=0.0000 val_ev=0.000 rew_ev=0.000 | prob_max(mean±std)=0.147±0.000 entropy_mix(mean±std)=1.94561±0.00000 entropy_wm(mean±std)=1.94561±0.00000 | pickup=0.024 toggle=0.000 unlockOpen=0.000 hasKey=0.588 invalid=0.476 | d_ag->key=1.0 d_key->door=-1.0 d_door->goal=2.0 | updates=0 total=0 train_started=False | grad_actor=0.000e+00 grad_critic=0.000e+00 Δθ_actor=0.000e+00 | src[wm,llm,rand]=[160, 3, 87]
+[   250] LLM: calls=1/500 cache_hit=0.750 cooldown=144
+[   250] Episodes: 1 Success rate: 0.000 | action_hist: [39, 21, 37, 43, 40, 33, 37]
+step=500 episode=2 return=0.00 success_rate=0.000
+[   500] Loss: 0.0000 Value: 0.000 Entropy(train): 0.00000 | world_psnr=0.00dB recon_mse=0.0000 reward_mae=0.0000 val_ev=0.000 rew_ev=0.000 | prob_max(mean±std)=0.147±0.000 entropy_mix(mean±std)=1.94561±0.00000 entropy_wm(mean±std)=1.94561±0.00000 | pickup=0.022 toggle=0.000 unlockOpen=0.000 hasKey=0.612 invalid=0.466 | d_ag->key=1.0 d_key->door=-1.0 d_door->goal=2.5 | updates=0 total=0 train_started=False | grad_actor=0.000e+00 grad_critic=0.000e+00 Δθ_actor=0.000e+00 | src[wm,llm,rand]=[338, 5, 157]
+[   500] LLM: calls=2/500 cache_hit=0.750 cooldown=254
+[   500] Episodes: 2 Success rate: 0.000 | action_hist: [77, 54, 76, 86, 71, 66, 70]
+step=750 episode=3 return=0.00 success_rate=0.000
+[   750] Loss: 0.0000 Value: 0.000 Entropy(train): 0.00000 | world_psnr=0.00dB recon_mse=0.0000 reward_mae=0.0000 val_ev=0.000 rew_ev=0.000 | prob_max(mean±std)=0.147±0.000 entropy_mix(mean±std)=1.94562±0.00001 entropy_wm(mean±std)=1.94562±0.00001 | pickup=0.020 toggle=0.001 unlockOpen=0.001 hasKey=0.616 invalid=0.461 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=2.0 | updates=0 total=0 train_started=False | grad_actor=0.000e+00 grad_critic=0.000e+00 Δθ_actor=0.000e+00 | src[wm,llm,rand]=[518, 5, 227]
+[   750] LLM: calls=2/500 cache_hit=0.750 cooldown=4
+[   750] Episodes: 3 Success rate: 0.000 | action_hist: [115, 83, 114, 121, 107, 103, 107]
+step=1000 episode=4 return=0.00 success_rate=0.000
+[  1000] Loss: -0.0000 Value: -0.000 Entropy(train): 0.00778 | world_psnr=0.00dB recon_mse=0.0000 reward_mae=0.0000 val_ev=0.000 rew_ev=0.000 | prob_max(mean±std)=0.147±0.000 entropy_mix(mean±std)=1.94562±0.00000 entropy_wm(mean±std)=1.94562±0.00000 | pickup=0.017 toggle=0.002 unlockOpen=0.001 hasKey=0.475 invalid=0.473 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=2.5 | updates=2 total=2 train_started=True | grad_actor=0.000e+00 grad_critic=0.000e+00 Δθ_actor=4.578e-02 | src[wm,llm,rand]=[698, 9, 293]
+[  1000] LLM: calls=3/500 cache_hit=0.750 cooldown=114
+[  1000] Episodes: 4 Success rate: 0.000 | action_hist: [148, 128, 147, 151, 147, 139, 140]
+step=1250 episode=5 return=0.00 success_rate=0.000
+[  1250] Loss: -0.0002 Value: 0.001 Entropy(train): 1.94382 | world_psnr=19.14dB recon_mse=0.0238 reward_mae=0.0060 val_ev=-1.884 rew_ev=-2407.791 | prob_max(mean±std)=0.155±0.007 entropy_mix(mean±std)=1.94409±0.00146 entropy_wm(mean±std)=1.94409±0.00146 | pickup=0.015 toggle=0.002 unlockOpen=0.001 hasKey=0.409 invalid=0.478 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=502 train_started=True | grad_actor=1.597e-02 grad_critic=2.433e-02 Δθ_actor=4.097e-01 | src[wm,llm,rand]=[874, 10, 366]
+[  1250] LLM: calls=4/500 cache_hit=0.692 cooldown=224
+[  1250] Episodes: 5 Success rate: 0.000 | action_hist: [184, 165, 183, 175, 182, 180, 181]
+step=1500 episode=6 return=0.00 success_rate=0.000
+[  1500] Loss: -0.0005 Value: 0.001 Entropy(train): 1.93774 | world_psnr=26.43dB recon_mse=0.0023 reward_mae=0.0052 val_ev=-0.976 rew_ev=-3186.176 | prob_max(mean±std)=0.171±0.018 entropy_mix(mean±std)=1.93761±0.00817 entropy_wm(mean±std)=1.93761±0.00817 | pickup=0.013 toggle=0.003 unlockOpen=0.002 hasKey=0.352 invalid=0.478 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=1002 train_started=True | grad_actor=4.112e-02 grad_critic=1.847e-02 Δθ_actor=3.744e-01 | src[wm,llm,rand]=[1040, 12, 448]
+[  1500] LLM: calls=5/500 cache_hit=0.688 cooldown=174
+[  1500] Episodes: 6 Success rate: 0.000 | action_hist: [215, 203, 220, 199, 220, 214, 229]
+step=1750 episode=7 return=0.00 success_rate=0.000
+[  1750] Loss: -0.0007 Value: -0.001 Entropy(train): 1.93336 | world_psnr=28.28dB recon_mse=0.0015 reward_mae=0.0065 val_ev=-0.853 rew_ev=-4504.773 | prob_max(mean±std)=0.170±0.010 entropy_mix(mean±std)=1.93762±0.00467 entropy_wm(mean±std)=1.93762±0.00467 | pickup=0.012 toggle=0.003 unlockOpen=0.002 hasKey=0.303 invalid=0.482 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=1502 train_started=True | grad_actor=6.431e-02 grad_critic=1.976e-02 Δθ_actor=4.787e-01 | src[wm,llm,rand]=[1208, 12, 530]
+[  1750] LLM: calls=5/500 cache_hit=0.688 cooldown=84
+[  1750] Episodes: 7 Success rate: 0.000 | action_hist: [260, 239, 251, 226, 262, 246, 266]
+step=2000 episode=8 return=0.00 success_rate=0.000
+[  2000] Loss: -0.0011 Value: 0.003 Entropy(train): 1.92434 | world_psnr=29.03dB recon_mse=0.0013 reward_mae=0.0063 val_ev=-0.788 rew_ev=-4745.674 | prob_max(mean±std)=0.182±0.019 entropy_mix(mean±std)=1.92908±0.01406 entropy_wm(mean±std)=1.92908±0.01406 | pickup=0.015 toggle=0.004 unlockOpen=0.003 hasKey=0.321 invalid=0.475 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=2002 train_started=True | grad_actor=8.681e-02 grad_critic=2.381e-02 Δθ_actor=4.991e-01 | src[wm,llm,rand]=[1388, 14, 598]
+[  2000] LLM: calls=6/500 cache_hit=0.700 cooldown=194
+[  2000] Episodes: 8 Success rate: 0.000 | action_hist: [299, 267, 280, 266, 303, 280, 305]
+step=2250 episode=9 return=0.00 success_rate=0.000
+[  2250] Loss: -0.0007 Value: -0.007 Entropy(train): 1.92366 | world_psnr=29.34dB recon_mse=0.0012 reward_mae=0.0055 val_ev=-0.662 rew_ev=-3547.795 | prob_max(mean±std)=0.181±0.013 entropy_mix(mean±std)=1.93184±0.00690 entropy_wm(mean±std)=1.93184±0.00690 | pickup=0.015 toggle=0.004 unlockOpen=0.002 hasKey=0.323 invalid=0.479 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=2502 train_started=True | grad_actor=1.050e-01 grad_critic=1.642e-02 Δθ_actor=4.787e-01 | src[wm,llm,rand]=[1558, 17, 675]
+[  2250] LLM: calls=7/500 cache_hit=0.708 cooldown=304
+[  2250] Episodes: 9 Success rate: 0.000 | action_hist: [333, 305, 320, 304, 342, 310, 336]
+step=2500 episode=10 return=0.00 success_rate=0.000
+[  2500] Loss: -0.0003 Value: -0.000 Entropy(train): 1.91953 | world_psnr=30.02dB recon_mse=0.0010 reward_mae=0.0060 val_ev=-0.760 rew_ev=-4241.286 | prob_max(mean±std)=0.179±0.014 entropy_mix(mean±std)=1.93052±0.00781 entropy_wm(mean±std)=1.93052±0.00781 | pickup=0.015 toggle=0.003 unlockOpen=0.002 hasKey=0.315 invalid=0.475 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=3002 train_started=True | grad_actor=1.219e-01 grad_critic=1.414e-02 Δθ_actor=4.542e-01 | src[wm,llm,rand]=[1748, 17, 735]
+[  2500] LLM: calls=7/500 cache_hit=0.708 cooldown=54
+[  2500] Episodes: 10 Success rate: 0.000 | action_hist: [366, 353, 358, 340, 363, 347, 373]
+step=2750 episode=11 return=0.00 success_rate=0.000
+[  2750] Loss: -0.0010 Value: 0.002 Entropy(train): 1.91522 | world_psnr=29.81dB recon_mse=0.0011 reward_mae=0.0058 val_ev=-0.831 rew_ev=-4171.981 | prob_max(mean±std)=0.180±0.011 entropy_mix(mean±std)=1.92664±0.01309 entropy_wm(mean±std)=1.92664±0.01309 | pickup=0.016 toggle=0.005 unlockOpen=0.003 hasKey=0.306 invalid=0.476 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=3502 train_started=True | grad_actor=1.477e-01 grad_critic=2.269e-02 Δθ_actor=5.660e-01 | src[wm,llm,rand]=[1910, 17, 823]
+[  2750] LLM: calls=8/500 cache_hit=0.680 cooldown=164
+[  2750] Episodes: 11 Success rate: 0.000 | action_hist: [397, 389, 405, 377, 393, 385, 404]
+step=3000 episode=12 return=0.00 success_rate=0.000
+[  3000] Loss: -0.0009 Value: -0.001 Entropy(train): 1.90223 | world_psnr=29.40dB recon_mse=0.0012 reward_mae=0.0066 val_ev=-1.004 rew_ev=-6714.992 | prob_max(mean±std)=0.187±0.015 entropy_mix(mean±std)=1.92096±0.01400 entropy_wm(mean±std)=1.92096±0.01400 | pickup=0.016 toggle=0.005 unlockOpen=0.003 hasKey=0.290 invalid=0.479 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=4002 train_started=True | grad_actor=1.681e-01 grad_critic=1.378e-02 Δθ_actor=5.975e-01 | src[wm,llm,rand]=[2081, 21, 898]
+[  3000] LLM: calls=9/500 cache_hit=0.690 cooldown=274
+[  3000] Episodes: 12 Success rate: 0.000 | action_hist: [432, 423, 447, 409, 418, 426, 445]
+step=3168 episode=13 return=0.40 success_rate=0.077
+[  3250] Loss: -0.0048 Value: -0.000 Entropy(train): 1.88453 | world_psnr=29.67dB recon_mse=0.0011 reward_mae=0.0039 val_ev=-0.823 rew_ev=-1698.197 | prob_max(mean±std)=0.202±0.024 entropy_mix(mean±std)=1.90445±0.03061 entropy_wm(mean±std)=1.90445±0.03061 | pickup=0.016 toggle=0.005 unlockOpen=0.003 hasKey=0.286 invalid=0.474 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=4502 train_started=True | grad_actor=1.948e-01 grad_critic=1.108e-02 Δθ_actor=5.666e-01 | src[wm,llm,rand]=[2262, 21, 967]
+[  3250] LLM: calls=9/500 cache_hit=0.690 cooldown=24
+[  3250] Episodes: 13 Success rate: 0.077 | action_hist: [461, 464, 481, 432, 459, 461, 492]
+step=3418 episode=14 return=0.00 success_rate=0.071
+[  3500] Loss: -0.0051 Value: -0.003 Entropy(train): 1.87285 | world_psnr=29.19dB recon_mse=0.0013 reward_mae=0.0047 val_ev=-1.090 rew_ev=-2658.513 | prob_max(mean±std)=0.200±0.026 entropy_mix(mean±std)=1.91205±0.02202 entropy_wm(mean±std)=1.91205±0.02202 | pickup=0.017 toggle=0.005 unlockOpen=0.003 hasKey=0.280 invalid=0.481 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=5002 train_started=True | grad_actor=2.356e-01 grad_critic=1.330e-02 Δθ_actor=6.904e-01 | src[wm,llm,rand]=[2439, 24, 1037]
+[  3500] LLM: calls=10/500 cache_hit=0.697 cooldown=134
+[  3500] Episodes: 14 Success rate: 0.071 | action_hist: [492, 489, 525, 468, 500, 500, 526]
+step=3668 episode=15 return=0.00 success_rate=0.067
+[  3750] Loss: -0.0113 Value: -0.000 Entropy(train): 1.78272 | world_psnr=29.39dB recon_mse=0.0012 reward_mae=0.0035 val_ev=-0.947 rew_ev=-1572.748 | prob_max(mean±std)=0.250±0.042 entropy_mix(mean±std)=1.85006±0.06263 entropy_wm(mean±std)=1.85006±0.06263 | pickup=0.019 toggle=0.004 unlockOpen=0.002 hasKey=0.293 invalid=0.478 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=5502 train_started=True | grad_actor=2.763e-01 grad_critic=1.081e-02 Δθ_actor=1.018e+00 | src[wm,llm,rand]=[2624, 25, 1101]
+[  3750] LLM: calls=11/500 cache_hit=0.694 cooldown=244
+[  3750] Episodes: 15 Success rate: 0.067 | action_hist: [532, 521, 558, 519, 542, 523, 555]
+step=3918 episode=16 return=0.00 success_rate=0.062
+[  4000] Loss: -0.0174 Value: 0.002 Entropy(train): 1.56500 | world_psnr=30.13dB recon_mse=0.0010 reward_mae=0.0028 val_ev=-0.724 rew_ev=-766.366 | prob_max(mean±std)=0.311±0.085 entropy_mix(mean±std)=1.62127±0.19565 entropy_wm(mean±std)=1.62127±0.19565 | pickup=0.018 toggle=0.004 unlockOpen=0.002 hasKey=0.280 invalid=0.490 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=6002 train_started=True | grad_actor=4.245e-01 grad_critic=9.497e-03 Δθ_actor=1.774e+00 | src[wm,llm,rand]=[2793, 29, 1178]
+[  4000] LLM: calls=12/500 cache_hit=0.700 cooldown=194
+[  4000] Episodes: 16 Success rate: 0.062 | action_hist: [557, 558, 626, 562, 572, 564, 561]
+step=4168 episode=17 return=0.00 success_rate=0.059
+[  4250] Loss: -0.0793 Value: 0.000 Entropy(train): 1.26801 | world_psnr=30.94dB recon_mse=0.0008 reward_mae=0.0027 val_ev=-1.122 rew_ev=-634.456 | prob_max(mean±std)=0.391±0.056 entropy_mix(mean±std)=1.30592±0.05046 entropy_wm(mean±std)=1.30592±0.05046 | pickup=0.017 toggle=0.004 unlockOpen=0.002 hasKey=0.293 invalid=0.506 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=6502 train_started=True | grad_actor=8.069e-01 grad_critic=5.896e-03 Δθ_actor=1.175e+00 | src[wm,llm,rand]=[2978, 29, 1243]
+[  4250] LLM: calls=12/500 cache_hit=0.700 cooldown=104
+[  4250] Episodes: 17 Success rate: 0.059 | action_hist: [563, 598, 708, 622, 576, 619, 564]
+step=4295 episode=18 return=0.54 success_rate=0.111
+step=4443 episode=19 return=0.47 success_rate=0.158
+[  4500] Loss: -0.0679 Value: 0.002 Entropy(train): 1.28298 | world_psnr=29.06dB recon_mse=0.0014 reward_mae=0.0070 val_ev=-0.882 rew_ev=-5864.898 | prob_max(mean±std)=0.365±0.058 entropy_mix(mean±std)=1.32756±0.04325 entropy_wm(mean±std)=1.32756±0.04325 | pickup=0.017 toggle=0.006 unlockOpen=0.003 hasKey=0.328 invalid=0.510 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=7002 train_started=True | grad_actor=8.216e-01 grad_critic=1.763e-02 Δθ_actor=6.740e-01 | src[wm,llm,rand]=[3154, 31, 1315]
+[  4500] LLM: calls=13/500 cache_hit=0.698 cooldown=214
+[  4500] Episodes: 19 Success rate: 0.158 | action_hist: [565, 655, 774, 679, 578, 681, 568]
+step=4693 episode=20 return=0.00 success_rate=0.150
+[  4750] Loss: -0.1217 Value: 0.003 Entropy(train): 1.37266 | world_psnr=30.76dB recon_mse=0.0009 reward_mae=0.0031 val_ev=-1.256 rew_ev=-1146.479 | prob_max(mean±std)=0.483±0.049 entropy_mix(mean±std)=1.24039±0.03925 entropy_wm(mean±std)=1.24039±0.03925 | pickup=0.016 toggle=0.005 unlockOpen=0.003 hasKey=0.361 invalid=0.519 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=7502 train_started=True | grad_actor=4.983e-01 grad_critic=1.457e-02 Δθ_actor=4.485e-01 | src[wm,llm,rand]=[3322, 34, 1394]
+[  4750] LLM: calls=14/500 cache_hit=0.702 cooldown=164
+[  4750] Episodes: 20 Success rate: 0.150 | action_hist: [570, 706, 866, 731, 582, 719, 576]
+step=4825 episode=21 return=0.52 success_rate=0.190
+[  5000] Loss: -0.0642 Value: 0.006 Entropy(train): 1.36963 | world_psnr=31.63dB recon_mse=0.0007 reward_mae=0.0019 val_ev=-0.986 rew_ev=-261.428 | prob_max(mean±std)=0.554±0.087 entropy_mix(mean±std)=1.11961±0.08827 entropy_wm(mean±std)=1.11961±0.08827 | pickup=0.016 toggle=0.006 unlockOpen=0.003 hasKey=0.391 invalid=0.528 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=8002 train_started=True | grad_actor=4.654e-01 grad_critic=1.671e-02 Δθ_actor=2.787e-01 | src[wm,llm,rand]=[3494, 34, 1472]
+[  5000] LLM: calls=14/500 cache_hit=0.702 cooldown=74
+[  5000] Episodes: 21 Success rate: 0.190 | action_hist: [576, 747, 992, 779, 584, 742, 580]
+step=5075 episode=22 return=0.00 success_rate=0.182
+[  5250] Loss: -0.0003 Value: 0.005 Entropy(train): 1.38074 | world_psnr=31.94dB recon_mse=0.0006 reward_mae=0.0021 val_ev=-1.409 rew_ev=-213.110 | prob_max(mean±std)=0.558±0.072 entropy_mix(mean±std)=1.13636±0.08067 entropy_wm(mean±std)=1.13636±0.08067 | pickup=0.015 toggle=0.006 unlockOpen=0.003 hasKey=0.420 invalid=0.538 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=8502 train_started=True | grad_actor=7.157e-03 grad_critic=1.497e-02 Δθ_actor=8.616e-02 | src[wm,llm,rand]=[3672, 36, 1542]
+[  5250] LLM: calls=15/500 cache_hit=0.694 cooldown=184
+[  5250] Episodes: 22 Success rate: 0.182 | action_hist: [580, 790, 1138, 819, 586, 753, 584]
+step=5325 episode=23 return=0.00 success_rate=0.174
+[  5500] Loss: -0.0012 Value: 0.003 Entropy(train): 1.38472 | world_psnr=32.29dB recon_mse=0.0006 reward_mae=0.0022 val_ev=-1.148 rew_ev=-179.608 | prob_max(mean±std)=0.542±0.074 entropy_mix(mean±std)=1.16616±0.07936 entropy_wm(mean±std)=1.16616±0.07936 | pickup=0.015 toggle=0.006 unlockOpen=0.003 hasKey=0.429 invalid=0.549 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=9002 train_started=True | grad_actor=1.018e-02 grad_critic=1.176e-02 Δθ_actor=3.853e-02 | src[wm,llm,rand]=[3843, 36, 1621]
+[  5500] LLM: calls=16/500 cache_hit=0.680 cooldown=294
+[  5500] Episodes: 23 Success rate: 0.174 | action_hist: [584, 827, 1276, 853, 590, 785, 585]
+step=5575 episode=24 return=0.00 success_rate=0.167
+[  5750] Loss: -0.0063 Value: 0.004 Entropy(train): 1.38563 | world_psnr=32.46dB recon_mse=0.0006 reward_mae=0.0026 val_ev=-1.334 rew_ev=-195.131 | prob_max(mean±std)=0.538±0.069 entropy_mix(mean±std)=1.17583±0.07506 entropy_wm(mean±std)=1.17583±0.07506 | pickup=0.014 toggle=0.005 unlockOpen=0.003 hasKey=0.451 invalid=0.561 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=9502 train_started=True | grad_actor=2.583e-02 grad_critic=1.396e-02 Δθ_actor=3.145e-02 | src[wm,llm,rand]=[4034, 36, 1680]
+[  5750] LLM: calls=16/500 cache_hit=0.680 cooldown=44
+[  5750] Episodes: 24 Success rate: 0.167 | action_hist: [585, 863, 1400, 906, 591, 819, 586]
+step=5763 episode=25 return=0.32 success_rate=0.200
+[  6000] Loss: -0.0020 Value: 0.005 Entropy(train): 1.38581 | world_psnr=32.61dB recon_mse=0.0006 reward_mae=0.0026 val_ev=-0.906 rew_ev=-220.781 | prob_max(mean±std)=0.517±0.080 entropy_mix(mean±std)=1.19665±0.08039 entropy_wm(mean±std)=1.19665±0.08039 | pickup=0.014 toggle=0.005 unlockOpen=0.003 hasKey=0.473 invalid=0.570 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=10002 train_started=True | grad_actor=4.929e-02 grad_critic=1.633e-02 Δθ_actor=1.659e-01 | src[wm,llm,rand]=[4215, 42, 1743]
+[  6000] LLM: calls=17/500 cache_hit=0.702 cooldown=154
+[  6000] Episodes: 25 Success rate: 0.200 | action_hist: [587, 903, 1525, 955, 592, 850, 588]
+step=6013 episode=26 return=0.00 success_rate=0.192
+[  6250] Loss: -0.0120 Value: 0.003 Entropy(train): 1.38597 | world_psnr=32.76dB recon_mse=0.0005 reward_mae=0.0019 val_ev=-1.031 rew_ev=-124.775 | prob_max(mean±std)=0.466±0.070 entropy_mix(mean±std)=1.25383±0.06297 entropy_wm(mean±std)=1.25383±0.06297 | pickup=0.014 toggle=0.005 unlockOpen=0.003 hasKey=0.488 invalid=0.576 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=10502 train_started=True | grad_actor=9.093e-02 grad_critic=1.243e-02 Δθ_actor=2.107e-01 | src[wm,llm,rand]=[4388, 45, 1817]
+[  6250] LLM: calls=18/500 cache_hit=0.705 cooldown=264
+[  6250] Episodes: 26 Success rate: 0.192 | action_hist: [592, 944, 1640, 1007, 595, 880, 592]
+step=6263 episode=27 return=0.00 success_rate=0.185
+[  6500] Loss: -0.0131 Value: 0.006 Entropy(train): 1.38183 | world_psnr=32.66dB recon_mse=0.0006 reward_mae=0.0027 val_ev=-0.796 rew_ev=-291.147 | prob_max(mean±std)=0.441±0.065 entropy_mix(mean±std)=1.26508±0.05124 entropy_wm(mean±std)=1.26508±0.05124 | pickup=0.013 toggle=0.005 unlockOpen=0.003 hasKey=0.471 invalid=0.582 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=11002 train_started=True | grad_actor=1.620e-01 grad_critic=1.628e-02 Δθ_actor=5.850e-01 | src[wm,llm,rand]=[4564, 45, 1891]
+[  6500] LLM: calls=18/500 cache_hit=0.705 cooldown=14
+[  6500] Episodes: 27 Success rate: 0.185 | action_hist: [593, 993, 1739, 1066, 600, 914, 595]
+step=6513 episode=28 return=0.00 success_rate=0.179
+[  6750] Loss: 0.0016 Value: 0.003 Entropy(train): 1.36958 | world_psnr=31.32dB recon_mse=0.0009 reward_mae=0.0042 val_ev=-1.067 rew_ev=-1675.895 | prob_max(mean±std)=0.352±0.060 entropy_mix(mean±std)=1.34930±0.05009 entropy_wm(mean±std)=1.34930±0.05009 | pickup=0.013 toggle=0.005 unlockOpen=0.003 hasKey=0.486 invalid=0.585 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=11502 train_started=True | grad_actor=2.657e-01 grad_critic=2.186e-02 Δθ_actor=1.116e+00 | src[wm,llm,rand]=[4747, 47, 1956]
+[  6750] LLM: calls=19/500 cache_hit=0.703 cooldown=124
+[  6750] Episodes: 28 Success rate: 0.179 | action_hist: [596, 1055, 1810, 1127, 603, 961, 598]
+step=6763 episode=29 return=0.00 success_rate=0.172
+[  7000] Loss: -0.0003 Value: 0.003 Entropy(train): 1.41938 | world_psnr=30.03dB recon_mse=0.0011 reward_mae=0.0051 val_ev=-1.097 rew_ev=-2222.102 | prob_max(mean±std)=0.463±0.091 entropy_mix(mean±std)=1.26835±0.08531 entropy_wm(mean±std)=1.26835±0.08531 | pickup=0.013 toggle=0.005 unlockOpen=0.003 hasKey=0.502 invalid=0.579 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=12002 train_started=True | grad_actor=3.127e-01 grad_critic=1.395e-02 Δθ_actor=1.044e+00 | src[wm,llm,rand]=[4916, 50, 2034]
+[  7000] LLM: calls=20/500 cache_hit=0.706 cooldown=234
+[  7000] Episodes: 29 Success rate: 0.172 | action_hist: [599, 1171, 1870, 1155, 606, 998, 601]
+step=7013 episode=30 return=0.00 success_rate=0.167
+[  7250] Loss: 0.0054 Value: 0.002 Entropy(train): 1.52980 | world_psnr=30.10dB recon_mse=0.0010 reward_mae=0.0023 val_ev=-1.315 rew_ev=-583.909 | prob_max(mean±std)=0.434±0.085 entropy_mix(mean±std)=1.29079±0.08506 entropy_wm(mean±std)=1.29079±0.08506 | pickup=0.012 toggle=0.005 unlockOpen=0.003 hasKey=0.506 invalid=0.568 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=12502 train_started=True | grad_actor=3.581e-01 grad_critic=1.099e-02 Δθ_actor=8.610e-01 | src[wm,llm,rand]=[5109, 51, 2090]
+[  7250] LLM: calls=21/500 cache_hit=0.696 cooldown=184
+[  7250] Episodes: 30 Success rate: 0.167 | action_hist: [666, 1267, 1906, 1173, 609, 1025, 604]
+step=7263 episode=31 return=0.00 success_rate=0.161
+[  7500] Loss: -0.0220 Value: 0.002 Entropy(train): 1.59710 | world_psnr=31.42dB recon_mse=0.0007 reward_mae=0.0018 val_ev=-1.023 rew_ev=-160.025 | prob_max(mean±std)=0.512±0.171 entropy_mix(mean±std)=1.22624±0.21315 entropy_wm(mean±std)=1.22624±0.21315 | pickup=0.012 toggle=0.005 unlockOpen=0.003 hasKey=0.517 invalid=0.558 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=13002 train_started=True | grad_actor=3.922e-01 grad_critic=1.110e-02 Δθ_actor=7.589e-01 | src[wm,llm,rand]=[5297, 54, 2149]
+[  7500] LLM: calls=21/500 cache_hit=0.708 cooldown=94
+[  7500] Episodes: 31 Success rate: 0.161 | action_hist: [760, 1315, 1959, 1184, 610, 1066, 606]
+step=7513 episode=32 return=0.00 success_rate=0.156
+[  7750] Loss: -0.0014 Value: 0.003 Entropy(train): 1.56961 | world_psnr=29.59dB recon_mse=0.0013 reward_mae=0.0051 val_ev=-0.987 rew_ev=-2220.274 | prob_max(mean±std)=0.459±0.117 entropy_mix(mean±std)=1.30929±0.16323 entropy_wm(mean±std)=1.30929±0.16323 | pickup=0.012 toggle=0.005 unlockOpen=0.003 hasKey=0.518 invalid=0.549 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=13502 train_started=True | grad_actor=5.011e-01 grad_critic=1.098e-02 Δθ_actor=8.286e-01 | src[wm,llm,rand]=[5474, 57, 2219]
+[  7750] LLM: calls=22/500 cache_hit=0.711 cooldown=204
+[  7750] Episodes: 32 Success rate: 0.156 | action_hist: [852, 1377, 1997, 1200, 615, 1097, 612]
+step=7763 episode=33 return=0.00 success_rate=0.152
+[  8000] Loss: 0.0029 Value: 0.001 Entropy(train): 1.58613 | world_psnr=30.14dB recon_mse=0.0010 reward_mae=0.0021 val_ev=-1.220 rew_ev=-568.595 | prob_max(mean±std)=0.388±0.044 entropy_mix(mean±std)=1.40105±0.05422 entropy_wm(mean±std)=1.40105±0.05422 | pickup=0.012 toggle=0.005 unlockOpen=0.003 hasKey=0.519 invalid=0.545 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=14002 train_started=True | grad_actor=5.205e-01 grad_critic=9.395e-03 Δθ_actor=1.228e+00 | src[wm,llm,rand]=[5656, 59, 2285]
+[  8000] LLM: calls=23/500 cache_hit=0.713 cooldown=154
+[  8000] Episodes: 33 Success rate: 0.152 | action_hist: [923, 1436, 2026, 1210, 620, 1170, 615]
+step=8013 episode=34 return=0.00 success_rate=0.147
+[  8250] Loss: 0.0032 Value: 0.002 Entropy(train): 1.62801 | world_psnr=30.77dB recon_mse=0.0009 reward_mae=0.0011 val_ev=-0.770 rew_ev=-136.368 | prob_max(mean±std)=0.339±0.085 entropy_mix(mean±std)=1.53094±0.08796 entropy_wm(mean±std)=1.53094±0.08796 | pickup=0.012 toggle=0.005 unlockOpen=0.003 hasKey=0.518 invalid=0.539 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=14502 train_started=True | grad_actor=5.308e-01 grad_critic=7.247e-03 Δθ_actor=9.418e-01 | src[wm,llm,rand]=[5847, 59, 2344]
+[  8250] LLM: calls=23/500 cache_hit=0.713 cooldown=64
+[  8250] Episodes: 34 Success rate: 0.147 | action_hist: [987, 1475, 2086, 1215, 623, 1212, 652]
+step=8263 episode=35 return=0.00 success_rate=0.143
+[  8500] Loss: -0.0409 Value: 0.001 Entropy(train): 1.47245 | world_psnr=30.54dB recon_mse=0.0009 reward_mae=0.0010 val_ev=-1.187 rew_ev=-93.455 | prob_max(mean±std)=0.437±0.105 entropy_mix(mean±std)=1.31408±0.16426 entropy_wm(mean±std)=1.31408±0.16426 | pickup=0.011 toggle=0.005 unlockOpen=0.003 hasKey=0.517 invalid=0.534 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=15002 train_started=True | grad_actor=8.039e-01 grad_critic=5.076e-03 Δθ_actor=1.551e+00 | src[wm,llm,rand]=[6028, 63, 2409]
+[  8500] LLM: calls=24/500 cache_hit=0.714 cooldown=174
+[  8500] Episodes: 35 Success rate: 0.143 | action_hist: [1063, 1525, 2097, 1216, 626, 1287, 686]
+step=8513 episode=36 return=0.00 success_rate=0.139
+[  8750] Loss: -0.0200 Value: 0.002 Entropy(train): 1.12840 | world_psnr=27.97dB recon_mse=0.0019 reward_mae=0.0060 val_ev=-1.040 rew_ev=-3200.516 | prob_max(mean±std)=0.602±0.166 entropy_mix(mean±std)=0.86973±0.24419 entropy_wm(mean±std)=0.86973±0.24419 | pickup=0.011 toggle=0.005 unlockOpen=0.003 hasKey=0.503 invalid=0.533 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=15502 train_started=True | grad_actor=9.268e-01 grad_critic=9.489e-03 Δθ_actor=8.747e-01 | src[wm,llm,rand]=[6214, 66, 2470]
+[  8750] LLM: calls=25/500 cache_hit=0.716 cooldown=284
+[  8750] Episodes: 36 Success rate: 0.139 | action_hist: [1067, 1608, 2107, 1216, 629, 1404, 719]
+step=8763 episode=37 return=0.00 success_rate=0.135
+[  9000] Loss: -0.0520 Value: 0.002 Entropy(train): 1.29596 | world_psnr=28.03dB recon_mse=0.0017 reward_mae=0.0021 val_ev=-1.140 rew_ev=-550.594 | prob_max(mean±std)=0.760±0.041 entropy_mix(mean±std)=0.75751±0.08763 entropy_wm(mean±std)=0.75751±0.08763 | pickup=0.011 toggle=0.005 unlockOpen=0.003 hasKey=0.489 invalid=0.543 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=16002 train_started=True | grad_actor=8.295e-01 grad_critic=6.468e-03 Δθ_actor=8.330e-01 | src[wm,llm,rand]=[6396, 66, 2538]
+[  9000] LLM: calls=25/500 cache_hit=0.716 cooldown=34
+[  9000] Episodes: 37 Success rate: 0.135 | action_hist: [1068, 1623, 2141, 1216, 634, 1591, 727]
+step=9013 episode=38 return=0.00 success_rate=0.132
+[  9250] Loss: -0.0610 Value: 0.004 Entropy(train): 1.35216 | world_psnr=29.10dB recon_mse=0.0013 reward_mae=0.0015 val_ev=-1.355 rew_ev=-119.046 | prob_max(mean±std)=0.724±0.056 entropy_mix(mean±std)=0.79388±0.07199 entropy_wm(mean±std)=0.79388±0.07199 | pickup=0.011 toggle=0.006 unlockOpen=0.003 hasKey=0.494 invalid=0.550 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=16502 train_started=True | grad_actor=8.380e-01 grad_critic=9.228e-03 Δθ_actor=6.147e-01 | src[wm,llm,rand]=[6589, 69, 2592]
+[  9250] LLM: calls=26/500 cache_hit=0.717 cooldown=144
+[  9250] Episodes: 38 Success rate: 0.132 | action_hist: [1070, 1647, 2171, 1218, 634, 1774, 736]
+step=9263 episode=39 return=0.00 success_rate=0.128
+[  9500] Loss: -0.0598 Value: 0.001 Entropy(train): 1.31848 | world_psnr=28.38dB recon_mse=0.0017 reward_mae=0.0021 val_ev=-2.073 rew_ev=-334.006 | prob_max(mean±std)=0.729±0.056 entropy_mix(mean±std)=0.76863±0.08075 entropy_wm(mean±std)=0.76863±0.08075 | pickup=0.010 toggle=0.006 unlockOpen=0.003 hasKey=0.482 invalid=0.557 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=17002 train_started=True | grad_actor=8.686e-01 grad_critic=3.840e-03 Δθ_actor=9.477e-01 | src[wm,llm,rand]=[6773, 73, 2654]
+[  9500] LLM: calls=27/500 cache_hit=0.719 cooldown=254
+[  9500] Episodes: 39 Success rate: 0.128 | action_hist: [1074, 1677, 2208, 1218, 637, 1943, 743]
+step=9513 episode=40 return=0.00 success_rate=0.125
+[  9750] Loss: 0.0210 Value: 0.002 Entropy(train): 1.14607 | world_psnr=27.28dB recon_mse=0.0020 reward_mae=0.0062 val_ev=-0.974 rew_ev=-2101.807 | prob_max(mean±std)=0.837±0.045 entropy_mix(mean±std)=0.60326±0.10380 entropy_wm(mean±std)=0.60326±0.10380 | pickup=0.010 toggle=0.006 unlockOpen=0.003 hasKey=0.470 invalid=0.565 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=17502 train_started=True | grad_actor=9.468e-01 grad_critic=6.978e-03 Δθ_actor=6.160e-01 | src[wm,llm,rand]=[6973, 73, 2704]
+[  9750] LLM: calls=27/500 cache_hit=0.719 cooldown=4
+[  9750] Episodes: 40 Success rate: 0.125 | action_hist: [1082, 1696, 2216, 1218, 639, 2142, 757]
+step=9763 episode=41 return=0.00 success_rate=0.122
+[ 10000] Loss: -0.0263 Value: 0.002 Entropy(train): 1.09974 | world_psnr=27.54dB recon_mse=0.0018 reward_mae=0.0016 val_ev=-1.073 rew_ev=-307.962 | prob_max(mean±std)=0.877±0.053 entropy_mix(mean±std)=0.46719±0.10676 entropy_wm(mean±std)=0.46719±0.10676 | pickup=0.010 toggle=0.006 unlockOpen=0.003 hasKey=0.466 invalid=0.573 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=18002 train_started=True | grad_actor=9.507e-01 grad_critic=5.085e-03 Δθ_actor=1.012e+00 | src[wm,llm,rand]=[7154, 76, 2770]
+[ 10000] LLM: calls=28/500 cache_hit=0.720 cooldown=114
+[ 10000] Episodes: 41 Success rate: 0.122 | action_hist: [1087, 1703, 2225, 1225, 642, 2347, 771]
+step=10013 episode=42 return=0.00 success_rate=0.119
+[ 10250] Loss: -0.0171 Value: 0.000 Entropy(train): 1.10225 | world_psnr=28.27dB recon_mse=0.0015 reward_mae=0.0007 val_ev=-1.113 rew_ev=-108.379 | prob_max(mean±std)=0.878±0.032 entropy_mix(mean±std)=0.49373±0.08016 entropy_wm(mean±std)=0.49372±0.08016 | pickup=0.010 toggle=0.005 unlockOpen=0.003 hasKey=0.456 invalid=0.580 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=18502 train_started=True | grad_actor=9.361e-01 grad_critic=2.424e-03 Δθ_actor=5.603e-01 | src[wm,llm,rand]=[7352, 79, 2819]
+[ 10250] LLM: calls=29/500 cache_hit=0.721 cooldown=224
+[ 10250] Episodes: 42 Success rate: 0.119 | action_hist: [1096, 1713, 2238, 1228, 646, 2548, 781]
+step=10263 episode=43 return=0.00 success_rate=0.116
+[ 10500] Loss: -0.0774 Value: 0.002 Entropy(train): 1.10752 | world_psnr=28.61dB recon_mse=0.0014 reward_mae=0.0007 val_ev=-0.864 rew_ev=-80.656 | prob_max(mean±std)=0.859±0.052 entropy_mix(mean±std)=0.55516±0.11730 entropy_wm(mean±std)=0.55516±0.11730 | pickup=0.009 toggle=0.005 unlockOpen=0.003 hasKey=0.445 invalid=0.587 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=19002 train_started=True | grad_actor=9.409e-01 grad_critic=4.446e-03 Δθ_actor=2.290e-01 | src[wm,llm,rand]=[7539, 81, 2880]
+[ 10500] LLM: calls=30/500 cache_hit=0.722 cooldown=174
+[ 10500] Episodes: 43 Success rate: 0.116 | action_hist: [1108, 1727, 2246, 1230, 647, 2751, 791]
+step=10513 episode=44 return=0.00 success_rate=0.114
+[ 10750] Loss: -0.0665 Value: 0.002 Entropy(train): 1.13984 | world_psnr=28.64dB recon_mse=0.0014 reward_mae=0.0006 val_ev=-0.838 rew_ev=-76.205 | prob_max(mean±std)=0.859±0.046 entropy_mix(mean±std)=0.56387±0.10128 entropy_wm(mean±std)=0.56387±0.10128 | pickup=0.009 toggle=0.005 unlockOpen=0.003 hasKey=0.435 invalid=0.593 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=19502 train_started=True | grad_actor=9.207e-01 grad_critic=3.017e-03 Δθ_actor=1.495e-01 | src[wm,llm,rand]=[7716, 81, 2953]
+[ 10750] LLM: calls=30/500 cache_hit=0.722 cooldown=84
+[ 10750] Episodes: 44 Success rate: 0.114 | action_hist: [1122, 1738, 2253, 1231, 654, 2952, 800]
+step=10763 episode=45 return=0.00 success_rate=0.111
+[ 11000] Loss: -0.1227 Value: 0.002 Entropy(train): 1.07196 | world_psnr=28.84dB recon_mse=0.0013 reward_mae=0.0006 val_ev=-0.655 rew_ev=-64.173 | prob_max(mean±std)=0.879±0.063 entropy_mix(mean±std)=0.49175±0.12162 entropy_wm(mean±std)=0.49175±0.12162 | pickup=0.009 toggle=0.005 unlockOpen=0.003 hasKey=0.425 invalid=0.600 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=20002 train_started=True | grad_actor=9.242e-01 grad_critic=3.361e-03 Δθ_actor=1.660e-01 | src[wm,llm,rand]=[7906, 83, 3011]
+[ 11000] LLM: calls=31/500 cache_hit=0.723 cooldown=194
+[ 11000] Episodes: 45 Success rate: 0.111 | action_hist: [1130, 1745, 2257, 1233, 654, 3174, 807]
+step=11013 episode=46 return=0.00 success_rate=0.109
+[ 11250] Loss: -0.1040 Value: 0.000 Entropy(train): 1.11957 | world_psnr=28.92dB recon_mse=0.0013 reward_mae=0.0006 val_ev=-0.830 rew_ev=-62.310 | prob_max(mean±std)=0.870±0.045 entropy_mix(mean±std)=0.52742±0.11138 entropy_wm(mean±std)=0.52742±0.11138 | pickup=0.009 toggle=0.005 unlockOpen=0.003 hasKey=0.432 invalid=0.606 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=20502 train_started=True | grad_actor=9.296e-01 grad_critic=2.795e-03 Δθ_actor=1.217e-01 | src[wm,llm,rand]=[8091, 85, 3074]
+[ 11250] LLM: calls=32/500 cache_hit=0.724 cooldown=304
+[ 11250] Episodes: 46 Success rate: 0.109 | action_hist: [1145, 1762, 2265, 1237, 657, 3374, 810]
+step=11263 episode=47 return=0.00 success_rate=0.106
+[ 11500] Loss: -0.1212 Value: 0.001 Entropy(train): 1.12369 | world_psnr=29.07dB recon_mse=0.0013 reward_mae=0.0005 val_ev=-0.793 rew_ev=-58.183 | prob_max(mean±std)=0.865±0.035 entropy_mix(mean±std)=0.52763±0.07980 entropy_wm(mean±std)=0.52763±0.07980 | pickup=0.009 toggle=0.005 unlockOpen=0.003 hasKey=0.423 invalid=0.612 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=21002 train_started=True | grad_actor=9.063e-01 grad_critic=2.263e-03 Δθ_actor=1.323e-01 | src[wm,llm,rand]=[8283, 85, 3132]
+[ 11500] LLM: calls=32/500 cache_hit=0.724 cooldown=54
+[ 11500] Episodes: 47 Success rate: 0.106 | action_hist: [1153, 1770, 2275, 1239, 662, 3578, 823]
+step=11513 episode=48 return=0.00 success_rate=0.104
+[ 11750] Loss: -0.1139 Value: 0.001 Entropy(train): 1.11197 | world_psnr=29.04dB recon_mse=0.0013 reward_mae=0.0005 val_ev=-0.582 rew_ev=-55.522 | prob_max(mean±std)=0.823±0.024 entropy_mix(mean±std)=0.59911±0.05636 entropy_wm(mean±std)=0.59911±0.05636 | pickup=0.009 toggle=0.005 unlockOpen=0.003 hasKey=0.414 invalid=0.617 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=21502 train_started=True | grad_actor=9.230e-01 grad_critic=1.599e-03 Δθ_actor=1.604e-01 | src[wm,llm,rand]=[8466, 88, 3196]
+[ 11750] LLM: calls=33/500 cache_hit=0.725 cooldown=164
+[ 11750] Episodes: 48 Success rate: 0.104 | action_hist: [1159, 1779, 2280, 1242, 663, 3780, 847]
+step=11763 episode=49 return=0.00 success_rate=0.102
+[ 12000] Loss: -0.0904 Value: 0.001 Entropy(train): 1.22843 | world_psnr=29.16dB recon_mse=0.0012 reward_mae=0.0005 val_ev=-0.563 rew_ev=-50.012 | prob_max(mean±std)=0.790±0.075 entropy_mix(mean±std)=0.67062±0.09174 entropy_wm(mean±std)=0.67062±0.09174 | pickup=0.008 toggle=0.005 unlockOpen=0.003 hasKey=0.423 invalid=0.620 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=22002 train_started=True | grad_actor=9.073e-01 grad_critic=2.764e-03 Δθ_actor=1.462e-01 | src[wm,llm,rand]=[8649, 91, 3260]
+[ 12000] LLM: calls=34/500 cache_hit=0.726 cooldown=274
+[ 12000] Episodes: 49 Success rate: 0.102 | action_hist: [1172, 1787, 2286, 1245, 666, 3964, 880]
+step=12013 episode=50 return=0.00 success_rate=0.100
+[ 12250] Loss: -0.1490 Value: 0.001 Entropy(train): 1.20160 | world_psnr=28.99dB recon_mse=0.0013 reward_mae=0.0006 val_ev=-0.468 rew_ev=-49.534 | prob_max(mean±std)=0.778±0.013 entropy_mix(mean±std)=0.67881±0.03160 entropy_wm(mean±std)=0.67881±0.03160 | pickup=0.008 toggle=0.005 unlockOpen=0.003 hasKey=0.416 invalid=0.623 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=22502 train_started=True | grad_actor=9.247e-01 grad_critic=2.952e-03 Δθ_actor=1.292e-01 | src[wm,llm,rand]=[8835, 91, 3324]
+[ 12250] LLM: calls=34/500 cache_hit=0.726 cooldown=24
+[ 12250] Episodes: 50 Success rate: 0.100 | action_hist: [1180, 1791, 2296, 1247, 671, 4143, 922]
+step=12263 episode=51 return=0.00 success_rate=0.098
+[ 12500] Loss: -0.1386 Value: 0.002 Entropy(train): 1.21956 | world_psnr=29.12dB recon_mse=0.0013 reward_mae=0.0006 val_ev=-0.662 rew_ev=-48.007 | prob_max(mean±std)=0.835±0.051 entropy_mix(mean±std)=0.59250±0.10586 entropy_wm(mean±std)=0.59250±0.10586 | pickup=0.008 toggle=0.005 unlockOpen=0.003 hasKey=0.407 invalid=0.628 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=23002 train_started=True | grad_actor=9.234e-01 grad_critic=3.307e-03 Δθ_actor=1.504e-01 | src[wm,llm,rand]=[9032, 95, 3373]
+[ 12500] LLM: calls=35/500 cache_hit=0.727 cooldown=134
+[ 12500] Episodes: 51 Success rate: 0.098 | action_hist: [1185, 1796, 2303, 1253, 674, 4348, 941]
+step=12513 episode=52 return=0.00 success_rate=0.096
+[ 12750] Loss: -0.1010 Value: 0.001 Entropy(train): 1.21916 | world_psnr=29.31dB recon_mse=0.0012 reward_mae=0.0005 val_ev=-0.365 rew_ev=-38.296 | prob_max(mean±std)=0.798±0.046 entropy_mix(mean±std)=0.63949±0.09319 entropy_wm(mean±std)=0.63949±0.09319 | pickup=0.008 toggle=0.004 unlockOpen=0.003 hasKey=0.415 invalid=0.633 | d_ag->key=1.0 d_key->door=1.0 d_door->goal=3.0 | updates=500 total=23502 train_started=True | grad_actor=9.209e-01 grad_critic=2.269e-03 Δθ_actor=1.524e-01 | src[wm,llm,rand]=[9209, 98, 3443]
+[ 12750] LLM: calls=36/500 cache_hit=0.727 cooldown=244
+[ 12750] Episodes: 52 Success rate: 0.096 | action_hist: [1193, 1799, 2312, 1261, 675, 4545, 965]
+step=12763 episode=53 return=0.00 success_rate=0.094
+Traceback (most recent call last):
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "C:\Users\Sophie\Documents\LoRe\LoRe\main.py", line 962, in <module>
+    raise SystemExit(main())
+  File "C:\Users\Sophie\Documents\LoRe\LoRe\main.py", line 601, in main
+    metrics = agent.update_sequence(batch_seq)
+  File "C:\Users\Sophie\Documents\LoRe\LoRe\agents\dreamer_v3.py", line 1111, in update_sequence
+    self._scaler.scale(loss).backward()
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\_tensor.py", line 626, in backward
+    torch.autograd.backward(
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\autograd\__init__.py", line 347, in backward
+    _engine_run_backward(
+  File "C:\Users\Sophie\anaconda3\envs\LoRe\lib\site-packages\torch\autograd\graph.py", line 823, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
